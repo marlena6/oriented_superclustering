@@ -1,5 +1,5 @@
-from headers import *
-
+import os
+import utils
 ##################################################################################
 ##################################################################################
 
@@ -28,10 +28,11 @@ class Catalog(object):
    ##################################################################################
    ##################################################################################
 
+
     def readInputCatalog(self):
         print("- read input catalog from "+self.pathInCatalog)
         if ".csv" in self.pathInCatalog:
-            header, data = read_csv_with_header(self.pathInCatalog)
+            header, data = utils.read_csv_with_header(self.pathInCatalog)
             if self.nObj is None:
                 self.nObj = len(data['RA'])
             # sky coordinates and redshift

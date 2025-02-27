@@ -10,8 +10,9 @@ from astropy.io import fits
 import matplotlib.pyplot as plt
 from mpi4py import MPI
 import pandas as pd
-from pixell import enmap
+from pixell import enmap, utils
 import catalog
+
 
 # start = time.time()
 # get the MPI ingredients
@@ -33,11 +34,14 @@ mode = 'ACTxDESI'
 
 errors = False # if true, split regions to get error estimates
 
-# Smooth the maps by a Gaussian with this beam FWHM
+# Describe the constraints on the input catalog
 constraint_str = "desi_lrgs_nugt2_egtpt3_smth10"
-# Also should come with a header that describes all the information
 
 orient = "sym" # options are "original", "random", "sym", "asym_x", "asym_y", "asym_xy"
+
+cutout_size = 40.*u.Mpc # size of the cutout in comoving Mpc
+
+nChunk = 1 # number of chunks = number of processors to use
 ########################################################
 
 
@@ -64,6 +68,33 @@ maps = {
 
 # read the orientation information
 Cat = catalog.Catalog(name="standard", nameLong=constraint_str, pathInCatalog="/mnt/raid-cita/mlokken/data/desi/stacking_points/lrgs_zlim_elglrg_nu10gt2_e10gtpt3_o10.csv")
+chunkSize = Cat.nObj / nChunk
+# list of indices for each of the nChunk chunks
+chunkIndices = [list(range(iChunk*chunkSize, (iChunk+1)*chunkSize)) for iChunk in range(nChunk)]
+# make sure not to miss the last few objects; add them to the last chunk
+chunkIndices[-1] = list(range((nChunk-1)*chunkSize, Cat.nObj))
+
+# if the unit of cutout_size is Mpc, then we need to convert it to degrees
+if cutout_size.unit == u.Mpc:
+    # based on the maximum redshift, set the max size for the cutouts
+    zmax = np.max(Cat.Z)
+    cutout_size_deg = 1/(cosmo.kpc_comoving_per_arcmin(zmax).to(u.Mpc/u.deg))*cutout_size
+elif cutout_size.unit in [u.deg, u.arcmin, u.arcsec]:
+    cutout_size_deg = cutout_size.to(u.deg)
+else:
+    raise ValueError("cutout_size must be in units of Mpc, degrees, arcminutes, or arcseconds")
+
+cutout_resolution = 0.5*utils.arcmin
+# make some Obj that has the ra, dec, theta, parityx, parityy for this chunk
+
+
+for m in maps:
+    imap = enmap.read_map(maps[m]["path"])
+    stackChunk(ChunkObj, imap, cutout_size_deg, cutout_resolution, orient=orient)
+
+
+
+
 
 
 nruns_local = len(dlist_tot) // size
