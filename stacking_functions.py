@@ -1,18 +1,18 @@
-from pixell import reproject, enmap
+from pixell import reproject, enmap, utils, enplot
 import numpy as np
 from scipy.interpolate import RectBivariateSpline
 
-def stackChunk(Chunk, imap, cutout_size_deg, cutout_resolution, orient):
-
+def stackChunk(Chunk, imap, cutout_size_deg, cutout_resolution_deg, orient):
+    # extract sample postage stamp around 0,0. Use this because thumbnail_geometry not working
+    thumb_base = reproject.thumbnails(imap, coords=np.deg2rad([0,0]).T, res=cutout_resolution_deg*utils.degree, r=cutout_size_deg*utils.degree, method="spline", order=1)
+    thumb_shape, thumb_wcs = thumb_base.shape, thumb_base.wcs
     # get the thumbnails
-    thumb_shape, thumb_wcs = enmap.thumbnail_geometry(r=cutout_size_deg.value*utils.degree, res=cutout_resolution) # should eventually use either utils or u for units, not both
+    # thumb_shape, thumb_wcs = enmap.thumbnail_geometry(r=cutout_size_deg*utils.degree, res=cutout_resolution_deg*utils.degree) # should eventually use either utils or u for units, not both
     resMap = enmap.zeros(thumb_shape, thumb_wcs) # initialize
-
     # radian positions of each pixel
     ipos = resMap.posmap()
     X = ipos[0]
-    Y = ipos[1]
-    x, y = X[:, 0], Y[0, :]
+    Y = ipos[1] #[:, ::-1] # flipping the order for use in scipy later
     XY = np.array([X.flatten(), Y.flatten()])
 
     # size of canvas in radians (this is for just x direction, but cutout is symmetric)
@@ -52,42 +52,59 @@ def stackChunk(Chunk, imap, cutout_size_deg, cutout_resolution, orient):
         seed_def = 6000 # def
         seed = 3000
         np.random.seed(seed) # randomized
-    for iObj in Chunk.nObj:
+    # get thumbnails for all the objects in the chunk
+    ra = Chunk.RA  # in deg
+    dec = Chunk.DEC # in deg
+    # extract postage stamps around the objects. Need them to be larger than the cutout size (I think?)
+    thumbs = reproject.thumbnails(imap, coords=np.deg2rad([dec,ra]).T, res=cutout_resolution_deg*utils.degree, r=cutout_size_deg*utils.degree+ 0.5*utils.degree, method="spline", order=1)
+    # radian positions of each pixel
+    ipos_lrg = thumbs[0].posmap()
+    X_lrg = ipos_lrg[0]
+    Y_lrg = ipos_lrg[1][:, ::-1] # flipping the order for use in scipy later
+    x_lrg, y_lrg = X_lrg[:, 0], Y_lrg[0, :]
+    print("x_lrg shape is", x_lrg.shape, "y_lrg shape is", y_lrg.shape, "thumbnail shape is", thumbs[0].shape)
+    for iObj in range(Chunk.nObj):
         if iObj%10000==0:
             print("- analyze object", iObj)
-        if ts.overlapFlag[iObj]:
-            # Object coordinates
-            ra = Chunk.RA[iObj]  # in deg
-            dec = Chunk.DEC[iObj] # in deg
-            # extract postage stamp around it. Need it to be larger than the cutout size (I think?) ##MARTINE
-            opos, stampMap, stampMask, stampHit = ts.extractStamp(ra, dec, test=False)
-            
-            # randomized
-            if orient=='random':
-                alpha = np.random.rand()*2.*np.pi
-                ca = np.cos(alpha)
-                sa = np.sin(alpha)
-            else:
-                ca = np.cos(Chunk.alpha[iObj]) # cos(alpha)
-                sa = np.sin(Chunk.alpha[iObj]) # sin(alpha)
-                fun2D = RectBivariateSpline(x, y, stampMap, kx=1, ky=1)
-                R = np.array([[ca, sa], [-sa, ca]]) # tested that this is the right
-                #R = np.array([[ca, -sa], [sa, ca]]) # TESTING!!!! I think mirror reflected
-                X_rot, Y_rot = np.dot(R, XY)
-                stampMap = fun2D(X_rot, Y_rot, grid=False).reshape(resMap.shape)
+        # if ts.overlapFlag[iObj]: # Re-implement this later
+        
+        # randomized
+        if orient=='random':
+            alpha = np.random.rand()*2.*np.pi
+            ca = np.cos(alpha)
+            sa = np.sin(alpha)
+        else:
+            ca = np.cos(Chunk.alpha[iObj]) # cos(alpha)
+            sa = np.sin(Chunk.alpha[iObj]) # sin(alpha)
+            # show the thumbnail
+            # enplot.show(enplot.plot(thumbs[iObj], colorbar=True, ticks=20))
+        
+            fun2D = RectBivariateSpline(x_lrg, y_lrg, thumbs[iObj], kx=1, ky=1)
+            # R = np.array([[ca, sa], [-sa, ca]]) # tested that this is the right
+            R = np.array([[ca, -sa], [sa, ca]]) # TESTING!!!! I think mirror reflected
+            X_rot, Y_rot = np.dot(R, XY)
+            stampMap = fun2D(X_rot, Y_rot, grid=False).reshape(resMap.shape)
             del X_rot, Y_rot
-        resMap += (stampMap * weightsLong[iObj])
+        resMap += (stampMap)
 
         count += 1
     
 
-    # dispatch each chunk of objects to a different processor
-    with sharedmem.MapReduce(np=ts.nProc) as pool:
-    resMap = np.array(pool.map(stackChunk, list(range(nChunk))))
+    # # dispatch each chunk of objects to a different processor
+    # with sharedmem.MapReduce(np=ts.nProc) as pool:
+    # resMap = np.array(pool.map(stackChunk, list(range(nChunk))))
 
-    # sum all the chunks
-    resMap = np.sum(resMap, axis=0)
-    # normalize by the proper sum of weights
-    resMap *= norm
+    # # sum all the chunks
+    # resMap = np.sum(resMap, axis=0)
+    # # normalize by the proper sum of weights
+    # resMap *= norm
 
     return resMap
+
+class Chunk:
+    def __init__(self, nObj, RA, DEC, alpha):
+        self.nObj = nObj
+        self.RA = RA
+        self.DEC = DEC
+        self.alpha = alpha
+    
