@@ -1,6 +1,7 @@
 from pixell import reproject, enmap, utils, enplot
 import numpy as np
 from scipy.interpolate import RectBivariateSpline
+import sys
 
 def stackChunk(Chunk, imap, cutout_size_deg, cutout_resolution_deg, orient):
     # extract sample postage stamp around 0,0. Use this because thumbnail_geometry not working
@@ -68,22 +69,31 @@ def stackChunk(Chunk, imap, cutout_size_deg, cutout_resolution_deg, orient):
             print("- analyze object", iObj)
         # if ts.overlapFlag[iObj]: # Re-implement this later
         
-        # randomized
-        if orient=='random':
-            alpha = np.random.rand()*2.*np.pi
-            ca = np.cos(alpha)
-            sa = np.sin(alpha)
-        else:
-            ca = np.cos(Chunk.alpha[iObj]) # cos(alpha)
-            sa = np.sin(Chunk.alpha[iObj]) # sin(alpha)
+        # need to make sure it works for 'original' orientation too
+        if orient != 'original':
+            # randomized
+            if orient=='random':
+                alpha = np.random.rand()*2.*np.pi
+                ca = np.cos(alpha)
+                sa = np.sin(alpha)
+            else:
+                ca = np.cos(Chunk.alpha[iObj]) # cos(alpha)
+                sa = np.sin(Chunk.alpha[iObj]) # sin(alpha)
             # show the thumbnail
             # enplot.show(enplot.plot(thumbs[iObj], colorbar=True, ticks=20))
-        
+            
             fun2D = RectBivariateSpline(x_lrg, y_lrg, thumbs[iObj], kx=1, ky=1)
-            # R = np.array([[ca, sa], [-sa, ca]]) # tested that this is the right
+            # R = np.array([[ca, sa], [-sa, ca]]) # tested that this is the right?
             R = np.array([[ca, -sa], [sa, ca]]) # TESTING!!!! I think mirror reflected
+            
             X_rot, Y_rot = np.dot(R, XY)
             stampMap = fun2D(X_rot, Y_rot, grid=False).reshape(resMap.shape)
+            if orient=="asymmetric":
+                # add asymmetry
+                if Chunk.x_asym[iObj] == -1:
+                    stampMap = np.fliplr(stampMap)
+                if Chunk.y_asym[iObj] == -1:
+                    stampMap = np.flipud(stampMap)
             del X_rot, Y_rot
         resMap += (stampMap)
 
@@ -102,9 +112,13 @@ def stackChunk(Chunk, imap, cutout_size_deg, cutout_resolution_deg, orient):
     return resMap
 
 class Chunk:
-    def __init__(self, nObj, RA, DEC, alpha):
-        self.nObj = nObj
+    def __init__(self, RA, DEC, alpha=None, x_asym=None, y_asym=None):
+        if len(RA)!=len(DEC):
+            sys.exit("RA and Dec must have the same length.")
+        self.nObj = len(RA)
         self.RA = RA
         self.DEC = DEC
         self.alpha = alpha
+        self.x_asym = x_asym
+        self.y_asym = y_asym
     
