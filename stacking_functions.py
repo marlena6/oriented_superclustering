@@ -4,11 +4,11 @@ from scipy.interpolate import RectBivariateSpline
 import sys
 
 def stackChunk(Chunk, imap, cutout_size_deg, cutout_resolution_deg, orient):
-    # extract sample postage stamp around 0,0. Use this because thumbnail_geometry not working
+    # extract sample postage stamp around 0,0.
+    # thumb_shape, thumb_wcs  = enmap.thumbnail_geometry(r=cutout_size_deg*utils.degree, res=cutout_resolution_deg*utils.degree) # this gives non-square shape
     thumb_base = reproject.thumbnails(imap, coords=np.deg2rad([0,0]).T, res=cutout_resolution_deg*utils.degree, r=cutout_size_deg*utils.degree, method="spline", order=1)
     thumb_shape, thumb_wcs = thumb_base.shape, thumb_base.wcs
     # get the thumbnails
-    # thumb_shape, thumb_wcs = enmap.thumbnail_geometry(r=cutout_size_deg*utils.degree, res=cutout_resolution_deg*utils.degree) # should eventually use either utils or u for units, not both
     resMap = enmap.zeros(thumb_shape, thumb_wcs) # initialize
     # radian positions of each pixel
     ipos = resMap.posmap()
@@ -57,7 +57,7 @@ def stackChunk(Chunk, imap, cutout_size_deg, cutout_resolution_deg, orient):
     ra = Chunk.RA  # in deg
     dec = Chunk.DEC # in deg
     # extract postage stamps around the objects. Need them to be larger than the cutout size (I think?)
-    thumbs = reproject.thumbnails(imap, coords=np.deg2rad([dec,ra]).T, res=cutout_resolution_deg*utils.degree, r=cutout_size_deg*utils.degree+ 0.5*utils.degree, method="spline", order=1)
+    thumbs = reproject.thumbnails(imap, coords=np.deg2rad([dec,ra]).T, res=cutout_resolution_deg*utils.degree, r=cutout_size_deg*utils.degree+ 0.5*utils.degree, method="spline", order=1) # ('tan')
     # radian positions of each pixel
     ipos_lrg = thumbs[0].posmap()
     X_lrg = ipos_lrg[0]
@@ -65,7 +65,7 @@ def stackChunk(Chunk, imap, cutout_size_deg, cutout_resolution_deg, orient):
     x_lrg, y_lrg = X_lrg[:, 0], Y_lrg[0, :]
     print("x_lrg shape is", x_lrg.shape, "y_lrg shape is", y_lrg.shape, "thumbnail shape is", thumbs[0].shape)
     for iObj in range(Chunk.nObj):
-        if iObj%10000==0:
+        if iObj%1000==0:
             print("- analyze object", iObj)
         # if ts.overlapFlag[iObj]: # Re-implement this later
         
@@ -90,9 +90,9 @@ def stackChunk(Chunk, imap, cutout_size_deg, cutout_resolution_deg, orient):
             stampMap = fun2D(X_rot, Y_rot, grid=False).reshape(resMap.shape)
             if orient=="asymmetric":
                 # add asymmetry
-                if Chunk.x_asym[iObj] == -1:
+                if Chunk.x_asym[iObj] == 1:
                     stampMap = np.fliplr(stampMap)
-                if Chunk.y_asym[iObj] == -1:
+                if Chunk.y_asym[iObj] == 1:
                     stampMap = np.flipud(stampMap)
             del X_rot, Y_rot
         resMap += (stampMap)
@@ -109,7 +109,7 @@ def stackChunk(Chunk, imap, cutout_size_deg, cutout_resolution_deg, orient):
     # # normalize by the proper sum of weights
     # resMap *= norm
 
-    return resMap
+    return resMap/Chunk.nObj
 
 class Chunk:
     def __init__(self, RA, DEC, alpha=None, x_asym=None, y_asym=None):
@@ -121,4 +121,5 @@ class Chunk:
         self.alpha = alpha
         self.x_asym = x_asym
         self.y_asym = y_asym
-    
+
+

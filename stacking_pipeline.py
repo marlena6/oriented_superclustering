@@ -1,26 +1,18 @@
 import numpy as np
-import error_analysis_funcs as ef
-import os
-from astropy.cosmology import Planck18 as cosmo, z_at_value
+from astropy.cosmology import Planck18 as cosmo
 import astropy.units as u
-import subprocess
-import coop_post_processing as cpp
-import coop_setup_funcs as csf
-from astropy.io import fits
-import matplotlib.pyplot as plt
-from mpi4py import MPI
-import pandas as pd
+# from mpi4py import MPI
 from pixell import enmap, utils
 import catalog
-
-
+from kmeans_radec import kmeans_sample
+from stacking_functions import *
+from postprocessing import Stack, radial_decompose_2D
+import h5py
 # start = time.time()
 # get the MPI ingredients
-comm = MPI.COMM_WORLD
-rank = comm.Get_rank()
-size = comm.Get_size()
-
-h = (cosmo.H0/100.).value
+# comm = MPI.COMM_WORLD
+# rank = comm.Get_rank()
+# size = comm.Get_size()
 
 # ALL CHOICES COME BELOW
 ########################################################
@@ -39,22 +31,29 @@ constraint_str = "desi_lrgs_nugt2_egtpt3_smth10"
 
 orient = "sym" # options are "original", "random", "sym", "asym_x", "asym_y", "asym_xy"
 
-cutout_size = 40.*u.Mpc # size of the cutout in comoving Mpc
+cutout_size = 19.*u.Mpc # size of the cutout in comoving Mpc
 
-nChunk = 1 # number of chunks = number of processors to use
+nreg = 48 # number of chunks = number of processors to use
+
+binsize = 10 # number of bins for statistics
 ########################################################
 
 
-#### section for getting the region splits for errors, to do later
-### if errors:
-###     nreg = 48
-###     # read the ra and dec from input
-    # then do the labels split
-################
+
+# add some function here to check if each map is an enmap, and convert from healpix to enmap otherwise
+
+# read the orientation information
+Cat = catalog.Catalog(name="standard", nameLong=constraint_str, pathInCatalog="/mnt/raid-cita/mlokken/data/desi/stacking_points/lrgs_zlim_elgclrgc_nu10gt2_e10gtpt3_o10_100pct.csv")
+
+#### getting the region splits for errors ####
+km = kmeans_sample(np.vstack((Cat.RA,Cat.DEC)).T, nreg, maxiter=100, tol=1.0e-5)
+Cat.labels = km.labels # add labels to the Catalog object
+#### getting the region splits for errors ####
 
 # input the dictionary of maps to stack here
 # format should be "type":"path/to/map.fits"
 # maps should be enmaps
+# eventually this can include the masks as well
 maps = {
     "map1" : {
         "type" : "y",
@@ -62,17 +61,6 @@ maps = {
         "shortname" : "ACT_y_fid"
     }
 }
-
-
-# add some function here to check if each map is an enmap, and convert from healpix to enmap otherwise
-
-# read the orientation information
-Cat = catalog.Catalog(name="standard", nameLong=constraint_str, pathInCatalog="/mnt/raid-cita/mlokken/data/desi/stacking_points/lrgs_zlim_elglrg_nu10gt2_e10gtpt3_o10.csv")
-chunkSize = Cat.nObj / nChunk
-# list of indices for each of the nChunk chunks
-chunkIndices = [list(range(iChunk*chunkSize, (iChunk+1)*chunkSize)) for iChunk in range(nChunk)]
-# make sure not to miss the last few objects; add them to the last chunk
-chunkIndices[-1] = list(range((nChunk-1)*chunkSize, Cat.nObj))
 
 # if the unit of cutout_size is Mpc, then we need to convert it to degrees
 if cutout_size.unit == u.Mpc:
@@ -84,19 +72,51 @@ elif cutout_size.unit in [u.deg, u.arcmin, u.arcsec]:
 else:
     raise ValueError("cutout_size must be in units of Mpc, degrees, arcminutes, or arcseconds")
 
-cutout_resolution = 0.5*utils.arcmin
-# make some Obj that has the ra, dec, theta, parityx, parityy for this chunk
-
+cutout_resolution = (0.5*u.arcmin).to(u.deg)
+print(f"will take thumbnails with size {cutout_size_deg:.2f} and resolution {cutout_resolution:.2f} deg.")
 
 for m in maps:
+    mappath = maps[m]["path"]
+    sn = maps[m]['shortname']
+    print(f"Reading map {mappath}")
     imap = enmap.read_map(maps[m]["path"])
-    stackChunk(ChunkObj, imap, cutout_size_deg, cutout_resolution, orient=orient)
+    # Prepare to save to an HDF5 file
+    with h5py.File(f'/mnt/scratch-lustre/mlokken/stacking/ACTxDESI/orient_by_desi_elgc+lrgc_100/stacks/enmap/{sn}_lrgs_zlim_elgclrgc_nu10gt2_e10gtpt3_o10_100pct', 'w') as f:
+        # we will parallelize this part later. Will probably need to be done differently where separate regions are written to their own files and consolidated later.
+        MapStack = None
+        nobj_per_reg = []
+        for n in range(nreg):
+            print()
+            # make the ChunkObj
+            in_reg = Cat.labels==n
+            ChunkObj = Chunk(Cat.RA[in_reg], Cat.DEC[in_reg], Cat.alpha[in_reg], Cat.x_asym[in_reg], Cat.y_asym[in_reg])
+            # get the stack    
+            stack_n = stackChunk(ChunkObj, imap, cutout_size_deg.value, cutout_resolution.value, orient=orient)
+            # get the profiles
+            r, Cr, Sr = radial_decompose_2D(stack_n, 5) # eventually I should start using Sr
+            nobj_per_reg.append(ChunkObj.nObj)
+            f.create_dataset(f'Cr_profiles_reg{n}', data=Cr)
+            f.create_dataset(f'stack_reg{n}', data=stack_n)
+        f.create_dataset('Nobj_per_region', data=np.asarray(nobj_per_reg))
+    #     if MapStack is None: # on the first pass
+    #         # initialize the object to hold the result
+    #         MapStack = Stack(40, img_splits = [stack_n], profile_splits = Cr, Npks_splits=[ChunkObj.nObj])
+    #         # add the next region to the MapStack object
+    #         MapStack.img_splits = np.concatenate(MapStack.img_splits, stack_n, axis=0)
+    #         MapStack.profile_splits.append(Cr)
+    #         MapStack.Npks_splits.append(ChunkObj.nObj)
+    #     print(f"Region {n} complete")
+    # # get statistics
+    # MapStack.bin_and_get_stats(10)
+    # # save the MapStack object information to a file
 
 
 
-
-
-
+# # list of indices for each of the nChunk chunks
+# chunkIndices = [list(range(iChunk*chunkSize, (iChunk+1)*chunkSize)) for iChunk in range(nChunk)]
+# # make sure not to miss the last few objects; add them to the last chunk
+# chunkIndices[-1] = list(range((nChunk-1)*chunkSize, Cat.nObj))
+'''
 nruns_local = len(dlist_tot) // size
 if rank == size-1:
     extras = len(dlist_tot) % size
@@ -279,3 +299,4 @@ for n in range(nruns_local):
         # times.append(end-start)
 # print("Rank, time list :", rank, times)
 # print("Rank, average time per loop:", rank, np.average(times))
+'''
