@@ -15,7 +15,7 @@ class Catalog(object):
         else:
             self.nameLong = nameLong
         self.pathInCatalog = pathInCatalog
-        self.readInputCatalog()
+        self.readInputCatalog(nObj=nObj)
    
 
    ##################################################################################

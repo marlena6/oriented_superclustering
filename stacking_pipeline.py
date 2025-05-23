@@ -1,53 +1,97 @@
 import numpy as np
 from astropy.cosmology import Planck18 as cosmo
 import astropy.units as u
-# from mpi4py import MPI
-from pixell import enmap, utils
+from pixell import enmap
 import catalog
 from kmeans_radec import kmeans_sample
-from stacking_functions import *
-from postprocessing import Stack, radial_decompose_2D
+from stacking_functions import Chunk, stackChunk, rescale_prof
+from stack_statistics import radial_decompose_2D
 import h5py
-# start = time.time()
-# get the MPI ingredients
-# comm = MPI.COMM_WORLD
-# rank = comm.Get_rank()
-# size = comm.Get_size()
+from pathlib import Path
+import os
 
-# ALL CHOICES COME BELOW
+
+
+use_mpi = True
+if use_mpi:
+    from mpi4py import MPI
+
+    # get the MPI ingredients
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank()
+    size = comm.Get_size()
+else:
+    rank = 0
+    size = 1
+# ALL ANALYSIS CHOICES COME BELOW
 ########################################################
-# mode is which data set, uncomment one of the following
-# mode  = 'Buzzard'
-# mode  = 'Cardinal'
-# mode = 'ACTxDES'
-mode = 'ACTxDESI'
-# mode = 'Websky'
-# mode = 'GRF'
 
-errors = False # if true, split regions to get error estimates
+errors = False  # if true, split regions to get error estimates
 
 # Describe the constraints on the input catalog
 constraint_str = "desi_lrgs_nugt2_egtpt3_smth10"
 
-orient = "sym" # options are "original", "random", "sym", "asym_x", "asym_y", "asym_xy"
+orient = "sym"  # options are "original", "random", "sym", "asym_x", "asym_y", "asym_xy"
 
-cutout_size = 19.*u.Mpc # size of the cutout in comoving Mpc
+cutout_rad = 20.0 * u.Mpc  # size of the cutout in comoving Mpc
 
-nreg = 48 # number of chunks = number of processors to use
+nreg = 48  # number of chunks = number of processors to use
 
-binsize = 10 # number of bins for statistics
+binsize = 10  # number of bins for statistics
+
+dz_rescale = 0.01  # size of z bins for rescaling
+
+savepath = "/mnt/scratch-lustre/mlokken/stacking/ACTxDESI/orient_by_desi_elgc+lrgc_100/stacks/enmap/"
+
+stack_pts_path = "/mnt/raid-cita/mlokken/data/desi/stacking_points/"
+stack_pts_file = "lrgs_zlim_elgclrgc_nu10gt2_e10gtpt3_o10_100pct_0.81_0.94.csv"
+
+test = True
 ########################################################
 
+if test:
+    nObj = 45000
+    teststr = '_test'
+else:
+    nObj = None
+    teststr = ''
+    
+# Make sure the output file doesn't already exist
+stkpts_str = Path(stack_pts_file).stem
+outfile = f"{savepath}/consol_stacks_{stkpts_str}{teststr}.h5"
+assert not os.path.exists(outfile), f"Final output file already exists at: {outfile}"
 
 
 # add some function here to check if each map is an enmap, and convert from healpix to enmap otherwise
 
 # read the orientation information
-Cat = catalog.Catalog(name="standard", nameLong=constraint_str, pathInCatalog="/mnt/raid-cita/mlokken/data/desi/stacking_points/lrgs_zlim_elgclrgc_nu10gt2_e10gtpt3_o10_100pct.csv")
+
+
+Cat = catalog.Catalog(
+    name="standard",
+    nameLong=constraint_str,
+    pathInCatalog=stack_pts_path + stack_pts_file,
+    nObj=nObj
+)
+print("Analyzing catalog of length", len(Cat.Z))
+minz = np.amin(Cat.Z)
+maxz = np.amax(Cat.Z)
 
 #### getting the region splits for errors ####
-km = kmeans_sample(np.vstack((Cat.RA,Cat.DEC)).T, nreg, maxiter=100, tol=1.0e-5)
-Cat.labels = km.labels # add labels to the Catalog object
+if rank == 0:
+    km = kmeans_sample(np.vstack((Cat.RA, Cat.DEC)).T, nreg, maxiter=100, tol=1.0e-5)
+    labels = km.labels
+    if size > 1:
+        for i in range(1, size):
+            print(f"rank {rank}", labels.shape)
+            comm.Send(labels, dest=i)
+            print(f"sending labels to rank {i}")
+elif rank > 0:
+    labels = np.empty(len(Cat.RA), dtype=np.int64)
+    print(f"rank {rank}", labels.shape)
+    comm.Recv(labels, source=0)
+    print(f"received labels on rank {rank}")
+Cat.labels = labels  # add labels to the Catalog object
 #### getting the region splits for errors ####
 
 # input the dictionary of maps to stack here
@@ -55,248 +99,162 @@ Cat.labels = km.labels # add labels to the Catalog object
 # maps should be enmaps
 # eventually this can include the masks as well
 maps = {
-    "map1" : {
-        "type" : "y",
-        "path" : "/mnt/raid-cita/mlokken/data/act_ymaps/ilc_SZ_yy.fits",
-        "shortname" : "ACT_y_fid"
+    "map1": {
+        "type": "y",
+        "path": "/mnt/raid-cita/mlokken/data/act_ymaps/ilc_SZ_yy.fits",
+        "shortname": "ACT_y_fid",
     }
 }
 
-# if the unit of cutout_size is Mpc, then we need to convert it to degrees
-if cutout_size.unit == u.Mpc:
-    # based on the maximum redshift, set the max size for the cutouts
-    zmax = np.max(Cat.Z)
-    cutout_size_deg = 1/(cosmo.kpc_comoving_per_arcmin(zmax).to(u.Mpc/u.deg))*cutout_size
-elif cutout_size.unit in [u.deg, u.arcmin, u.arcsec]:
-    cutout_size_deg = cutout_size.to(u.deg)
+# if the unit of cutout_rad is Mpc, then we need to convert it to degrees
+if cutout_rad.unit == u.Mpc:
+    # based on the minimum redshift, set the max size for the cutouts
+    cutout_rad_deg = (
+        1 / (cosmo.kpc_comoving_per_arcmin(minz).to(u.Mpc / u.deg)) * cutout_rad
+    )
+elif cutout_rad.unit in [u.arcmin, u.arcsec]:
+    cutout_rad_deg = cutout_rad.to(u.deg)
 else:
-    raise ValueError("cutout_size must be in units of Mpc, degrees, arcminutes, or arcseconds")
+    raise ValueError(
+        "cutout_rad must be in units of Mpc, degrees, arcminutes, or arcseconds"
+    )
 
-cutout_resolution = (0.5*u.arcmin).to(u.deg)
-print(f"will take thumbnails with size {cutout_size_deg:.2f} and resolution {cutout_resolution:.2f} deg.")
+cutout_resolution = (0.5 * u.arcmin).to(u.deg)
+print(
+    f"will take thumbnails with size {cutout_rad_deg:.2f} and resolution {cutout_resolution:.2f}."
+)
 
-for m in maps:
-    mappath = maps[m]["path"]
-    sn = maps[m]['shortname']
-    print(f"Reading map {mappath}")
-    imap = enmap.read_map(maps[m]["path"])
-    # Prepare to save to an HDF5 file
-    with h5py.File(f'/mnt/scratch-lustre/mlokken/stacking/ACTxDESI/orient_by_desi_elgc+lrgc_100/stacks/enmap/{sn}_lrgs_zlim_elgclrgc_nu10gt2_e10gtpt3_o10_100pct', 'w') as f:
-        # we will parallelize this part later. Will probably need to be done differently where separate regions are written to their own files and consolidated later.
-        MapStack = None
-        nobj_per_reg = []
-        for n in range(nreg):
-            print()
-            # make the ChunkObj
-            in_reg = Cat.labels==n
-            ChunkObj = Chunk(Cat.RA[in_reg], Cat.DEC[in_reg], Cat.alpha[in_reg], Cat.x_asym[in_reg], Cat.y_asym[in_reg])
-            # get the stack    
-            stack_n = stackChunk(ChunkObj, imap, cutout_size_deg.value, cutout_resolution.value, orient=orient)
-            # get the profiles
-            r, Cr, Sr = radial_decompose_2D(stack_n, 5) # eventually I should start using Sr
-            nobj_per_reg.append(ChunkObj.nObj)
-            f.create_dataset(f'Cr_profiles_reg{n}', data=Cr)
-            f.create_dataset(f'stack_reg{n}', data=stack_n)
-        f.create_dataset('Nobj_per_region', data=np.asarray(nobj_per_reg))
-    #     if MapStack is None: # on the first pass
-    #         # initialize the object to hold the result
-    #         MapStack = Stack(40, img_splits = [stack_n], profile_splits = Cr, Npks_splits=[ChunkObj.nObj])
-    #         # add the next region to the MapStack object
-    #         MapStack.img_splits = np.concatenate(MapStack.img_splits, stack_n, axis=0)
-    #         MapStack.profile_splits.append(Cr)
-    #         MapStack.Npks_splits.append(ChunkObj.nObj)
-    #     print(f"Region {n} complete")
-    # # get statistics
-    # MapStack.bin_and_get_stats(10)
-    # # save the MapStack object information to a file
+# calculate the comoving size and physical size of the lowest-redshift cutout
+Mpc_per_deg_comov_zmin = cosmo.kpc_comoving_per_arcmin(minz).to(u.Mpc / u.degree)
+Mpc_per_deg_phys_zmin  = cosmo.kpc_proper_per_arcmin(minz).to(u.Mpc / u.degree)
 
-
-
-# # list of indices for each of the nChunk chunks
-# chunkIndices = [list(range(iChunk*chunkSize, (iChunk+1)*chunkSize)) for iChunk in range(nChunk)]
-# # make sure not to miss the last few objects; add them to the last chunk
-# chunkIndices[-1] = list(range((nChunk-1)*chunkSize, Cat.nObj))
-'''
-nruns_local = len(dlist_tot) // size
-if rank == size-1:
-    extras = len(dlist_tot) % size
+### setup multiprocessing ###
+if use_mpi:
+    nruns_local = nreg // size
+    if rank == size - 1:
+        extras = nreg % size
+    else:
+        extras = 0
 else:
+    nruns_local = nreg
     extras = 0
-# times = []
-for n in range(nruns_local):
-    i = rank*nruns_local+n
-    print("Rank {:d}, bin {:d}".format(rank, i+1))
-    dlow, dhi = dlist_tot[i][0], dlist_tot[i][1]
-    zlow, zhi = zlist_tot[i][0], zlist_tot[i][1]
-    bincent  = (dlow+dhi)/2.
-    
-    if los_split_mode=='auto_overlap' or los_split_mode=='custom_dlist':
-        # find stacking objects only within plus/minus so_width/2 cMpc of the bin center
-        so_dlow  = bincent-so_width/2.
-        so_dhi   = bincent+so_width/2.
-        so_zlow, so_zhi = z_at_value(cosmo.comoving_distance, so_dlow*u.Mpc).value, z_at_value(cosmo.comoving_distance, so_dhi*u.Mpc).value
-        print("Finding stacking objects within {:.1f} cMpc of {:.0f} Mpc".format(so_width/2., bincent))
-        print("In redshift space, this is between {:.2f} and {:.2f}.".format(so_zlow,so_zhi))
-    elif los_split_mode=='auto_all' or los_split_mode=='custom_zlist':
-        so_dlow, so_dhi = dlow, dhi
-        so_zlow, so_zhi = zlow, zhi
-        print("Finding stacking objects within the full bin.")
-        
-    slice_included=False # set this to false, it will change to true if this slice is encompassed by a galaxy number density map
-    if filenames_in_Mpc:
-        # if so_dlow and so_dhi are round numbers, use them as ints
-        if int(so_dlow)==so_dlow and int(so_dhi)==so_dhi:
-            binstr_so   = "{:d}_{:d}Mpc".format(int(so_dlow), int(so_dhi))
-        else:
-            binstr_so   = ("{:.1f}_{:.1f}".format(so_dlow, so_dhi)).replace('.','pt')
-    else: # save/expect redshifts in the filenames
-        binstr_so   = ("{:.2f}_{:.2f}".format(so_zlow, so_zhi)).replace('.','pt')
-    
-    if filenames_in_Mpc:
-        if int(dlow)==dlow and int(dhi)==dhi:
-            binstr_orient = "{:d}_{:d}Mpc".format(int(dlow), int(dhi))
-        else:
-            binstr_orient = ("{:.1f}_{:.1f}".format(dlow, dhi)).replace('.','pt')   
-    else:
-        binstr_orient = ("{:.2f}_{:.2f}".format(zlow, zhi)).replace('.','pt')
-    # make the ini files
-    if orient:
-        orientstr="orient{:s}_{:d}pct_{:s}_{:s}".format(style, pct, orient_mode, binstr_orient)
-    else:
-        orientstr="randrot"
-    print("NOW PROCESSING REDSHIFT BIN", binstr_orient)
-    if mode=='ACTxDES':
-        inifile_root = "redmapper_{:s}_{:s}_{:s}{:s}_{:s}".format(cutstr, binstr_so, pt_selection_str, smth_str, orientstr)
-    elif mode=='ACTxDESI':
-        inifile_root = "lrg_{:s}_{:s}_{:s}{:s}_{:s}".format(cutstr, binstr_so, pt_selection_str, smth_str, orientstr)
-    pksfile = os.path.join(outpath+"orient_by_{:s}_{:d}/".format(orient_mode, pct), inifile_root+"_pks.fits")
-    if errors:
-        labels       = np.loadtxt("/home/mlokken/oriented_stacking/general_code/labels_{:d}_regions_{:s}_{:s}.txt".format(nreg,mode,cutstr))
-        # cl_zlow      = z_at_value(cosmo.comoving_distance, cl_dlow*u.Mpc).value
-        # cl_zhi       = z_at_value(cosmo.comoving_distance, cl_dhi*u.Mpc).value
-        # cl_inbin     = (cl_zlow<z_cl)&(z_cl<cl_zhi) # just need this for the boolean array to subselect from labels list
-        # labels_inbin = labels[cl_inbin]
-        #cm = plt.get_cmap('gist_rainbow')\
-        for reg in range(nreg):
-            # start = time.time()
-            regpath = os.path.join(stkpath,"{:d}".format(reg))
-            if not os.path.exists(regpath):
-                print("Making {:s}".format(regpath))
-                os.mkdir(regpath)
-            with fits.open(pksfile) as pks:
-                pkdata = pks[0].data
-                ncols = pkdata.shape[1]
-                colnames = ["id","theta","phi","rot_angle","x_up", "y_up"]
-                pd_pkdata = pd.DataFrame(data=pkdata.byteswap().newbyteorder(), columns=colnames[:ncols]) # make the peak info a dataframe so we can merge
-                pd_labels = pd.DataFrame(data=labels, columns=["id","reg_label"])
-                pks_w_labels = pd.merge(pd_pkdata, pd_labels, how='left', on="id")
-                # use the labels to split the data
-                in_reg = pks_w_labels["reg_label"] == reg
-                pkdata_new = pkdata[in_reg]
-                print("Peak data in region {:d} and this distance bin:".format(reg), len(pkdata_new))
-                if len(pkdata_new)>0:
-                    pksfile_reg = os.path.join(regpath, inifile_root+"_reg{:d}".format(reg)+"_pks.fits")
-                    pks[0].data = pkdata_new
-                    # save a new pks fits file with only pkdata in region, and run stack on that
-                    pks.writeto(pksfile_reg, overwrite=True)
-                    # for plotting
-                    # angle, ra, dec = cpp.peakinfo_radec(pksfile)
-                    #plt.scatter(ra[in_reg], dec[in_reg], c=cm(reg/48))
-                    #if reg==47:
-                    #    plt.show()
-                    # make the ini files
-            if len(pkdata_new)>0:
-                if stack_kappa:
-                    k_inifile_root = kmode+"_"+inifile_root+"_reg{:d}".format(reg)
-                y_inifile_root = ymode + "_"+inifile_root+"_reg{:d}".format(reg)
-                m_inifile_root = "DES_mask_"+inifile_root+"_reg{:d}".format(reg)
-                if stack_galaxies:
-                    zbins_ndmaps = [[0.2,0.36],[0.36,0.53],[0.53,0.72],[0.72,0.94]]
-                    for zbin in zbins_ndmaps:
-                        if (z_at_value(cosmo.comoving_distance, so_dlow*u.Mpc)>=zbin[0]) & (z_at_value(cosmo.comoving_distance, so_dhi*u.Mpc)<zbin[1]):
-                            zlow_str = ("{:.2f}".format(zbin[0])).replace('.', 'pt')
-                            zhi_str  = ("{:.2f}".format(zbin[1])).replace('.', 'pt')
-                            map_to_stack = pkmap_path+"ndmap_25_z_{:s}_{:s}.fits".format(zlow_str, zhi_str)
-                            g_inifile_root = "{:s}_maglim_z_{:s}_{:s}_".format(gmode, zlow_str,zhi_str)+inifile_root+"_reg{:d}".format(reg)
-                            slice_included = True
-                    if slice_included:
-                        if not os.path.exists(os.path.join(regpath, g_inifile_root+"_stk.fits")): # only try to do a g stack if there's a number density map that encompasses this slice 
-                            gstk_ini = ef.make_stk_ini_file(pksfile_reg, map_to_stack, standard_stk_file_errs, regpath, g_inifile_root,[dlow,dhi], stk_mask=gmask, rad_Mpc=40)
-                            print("Rank {:d} running Stack on {:s}".format(rank, gstk_ini))
-                            subprocess.run(args=["/home/mlokken/software/COOP/mapio/Stack",gstk_ini])
-                            # remove extraneous files
-                            os.remove(os.path.join(regpath, g_inifile_root+"_stk.txt"))
-                            os.remove(os.path.join(regpath, g_inifile_root+"_stk.patch"))
-                        elif os.path.exists(os.path.join(regpath, g_inifile_root+"_stk.fits")):
-                            print("Galaxy map already stacked. Moving on.")
-                    else:
-                        print("WARNING: this slice does not fall within a number density map.")
-                if stack_kappa and (not os.path.exists(os.path.join(regpath, k_inifile_root+"_stk.fits"))):
-                    kstk_ini = ef.make_stk_ini_file(pksfile_reg, kappamap, standard_stk_file_errs, regpath, k_inifile_root, [dlow,dhi], stk_mask=kappamask, rad_Mpc=40)
-                    print("Rank {:d} running Stack on {:s}".format(rank, kstk_ini))
-                    subprocess.run(args=["/home/mlokken/software/COOP/mapio/Stack",kstk_ini])
-                    # remove extraneous files                                                                                                                                     
-                    os.remove(os.path.join(regpath, k_inifile_root+"_stk.txt"))
-                    os.remove(os.path.join(regpath, k_inifile_root+"_stk.patch"))
-                elif stack_kappa and os.path.exists(os.path.join(regpath, k_inifile_root+"_stk.fits")):
-                    print("Kappa map already stacked. Moving on.")
-                if stack_y & (not os.path.exists(os.path.join(regpath, y_inifile_root+"_stk.fits"))):
-                    stk_ini = ef.make_stk_ini_file(pksfile_reg, ymap, standard_stk_file_errs, regpath, y_inifile_root, [dlow,dhi], stk_mask=ymask, rad_Mpc=40)
-                    print("Rank {:d} running Stack on {:s}".format(rank,stk_ini))
-                    subprocess.run(args=["/home/mlokken/software/COOP/mapio/Stack",stk_ini])
-                    # remove extraneous files                                                                                                                                     
-                    os.remove(os.path.join(regpath, y_inifile_root+"_stk.txt"))
-                    os.remove(os.path.join(regpath, y_inifile_root+"_stk.patch"))
-                elif stack_y and os.path.exists(os.path.join(regpath, y_inifile_root+"_stk.fits")):
-                    print("Y map already stacked. Moving on.")
-                if stack_mask and (not os.path.exists(os.path.join(regpath, m_inifile_root+"_stk.fits"))):
-                    mstk_ini = ef.make_stk_ini_file(pksfile_reg, gmask, standard_stk_file_errs, regpath, m_inifile_root, [dlow,dhi], stk_mask=gmask, rad_Mpc=40)
-                    print("Rank {:d} running Stack on {:s}".format(rank, mstk_ini))
-                    subprocess.run(args=["/home/mlokken/software/COOP/mapio/Stack",mstk_ini])
-                    # remove extraneous files                                                                                                                                     
-                    os.remove(os.path.join(regpath, m_inifile_root+"_stk.txt"))
-                    os.remove(os.path.join(regpath, m_inifile_root+"_stk.patch"))
-                elif stack_mask and os.path.exists(os.path.join(regpath, m_inifile_root+"_stk.fits")):
-                    print("Mask already stacked. Moving on.")
-                # end = time.time()
-                # times.append(end-start)
-    else:
-        if stack_kappa:
-            k_inifile_root = kmode+inifile_root
-        y_inifile_root = ymode+"_"+inifile_root
-        # start = time.time()
-        if stack_galaxies:
-            zbins_ndmaps = [[0.2,0.36],[0.36,0.53],[0.53,0.72],[0.72,0.94]]
-            for zbin in zbins_ndmaps:
-                print(zbin, so_dlow, so_dhi)
-                if (z_at_value(cosmo.comoving_distance, so_dlow*u.Mpc)>zbin[0]) & (z_at_value(cosmo.comoving_distance, so_dhi*u.Mpc)<zbin[1]):
-                    zlow_str = ("{:.2f}".format(zbin[0])).replace('.', 'pt')
-                    zhi_str  = ("{:.2f}".format(zbin[1])).replace('.', 'pt')
-                    map_to_stack = pkmap_path+"ndmap_25_z_{:s}_{:s}.fits".format(zlow_str, zhi_str)
-                    g_inifile_root = "{:s}_maglim_z_{:s}_{:s}_".format(gmode,zlow_str,zhi_str)+inifile_root
-            if not os.path.exists(os.path.join(stkpath, g_inifile_root+hankelstr)):
-                gstk_ini = ef.make_stk_ini_file(pksfile, map_to_stack, standard_stk_file, stkpath, g_inifile_root,[dlow,dhi], stk_mask=gmask, rad_Mpc=40)
-                print("Rank {:d} running Stack on {:s}".format(rank, gstk_ini))
-                subprocess.run(args=["/home/mlokken/software/COOP/mapio/Stack",gstk_ini])
-                # remove extraneous files                                                                                                                                     
-                os.remove(os.path.join(stkpath, g_inifile_root+"_stk.txt"))
-                os.remove(os.path.join(stkpath, g_inifile_root+"_stk.patch"))
-        if stack_kappa and (not os.path.exists(os.path.join(stkpath, k_inifile_root+hankelstr))):
-            kstk_ini = ef.make_stk_ini_file(pksfile, kappamap, standard_stk_file, stkpath, k_inifile_root, [dlow,dhi], stk_mask=kappamask, rad_Mpc=40)
-            print("Rank {:d} running Stack on {:s}".format(rank, kstk_ini))
-            subprocess.run(args=["/home/mlokken/software/COOP/mapio/Stack",kstk_ini])
-            # remove extraneous files                                                                                                                                     
-            os.remove(os.path.join(stkpath, k_inifile_root+"_stk.txt"))
-            os.remove(os.path.join(stkpath, k_inifile_root+"_stk.patch"))
-        if stack_y & (not os.path.exists(os.path.join(stkpath, y_inifile_root+hankelstr))):
-            stk_ini = ef.make_stk_ini_file(pksfile, ymap, standard_stk_file, stkpath, y_inifile_root, [dlow,dhi], stk_mask=ymask, rad_Mpc=40)
-            print("Rank {:d} running Stack on {:s}".format(rank,stk_ini))
-            subprocess.run(args=["/home/mlokken/software/COOP/mapio/Stack",stk_ini])
-            # remove extraneous files                                                                                                                                     
-            os.remove(os.path.join(stkpath, y_inifile_root+"_stk.txt"))
-            os.remove(os.path.join(stkpath, y_inifile_root+"_stk.patch"))
-        # end = time.time()
-        # times.append(end-start)
-# print("Rank, time list :", rank, times)
-# print("Rank, average time per loop:", rank, np.average(times))
-'''
+### end setup multiprocessing ###
+
+
+# Prepare to save to an HDF5 file
+with h5py.File(f"{savepath}/stacks_{stkpts_str}_{rank}{teststr}.h5", "w") as f:
+    f.attrs["cutout_rad_deg"]   = cutout_rad_deg.value
+    f.attrs["cutout_rad_cMpc"] = cutout_rad_deg * Mpc_per_deg_comov_zmin.value
+    f.attrs["cutout_rad_pMpc"]   = cutout_rad_deg * Mpc_per_deg_phys_zmin.value
+    for m in maps:
+        mappath = maps[m]["path"]
+        sn = maps[m]["shortname"]
+        map_group = f.create_group(sn)
+        map_group.attrs['map_path'] = mappath
+        print(f"Reading map {mappath}")
+        imap = enmap.read_map(maps[m]["path"])
+        for i in range(nruns_local + extras):
+            n = rank * nruns_local + i
+            in_reg = Cat.labels == n
+            nobj_regn = 0
+            # make an HDF5 group for this region
+            reg_group = map_group.create_group(f"reg_{n}")
+            reg_group.attrs["Region"] = n
+            for z in np.linspace(
+                minz, maxz, int((maxz - minz) / dz_rescale)
+            ):  # iterate through small z bins
+                Mpc_per_deg_phys_z  = cosmo.kpc_proper_per_arcmin(z).to(u.Mpc / u.degree)
+                Mpc_per_deg_comov_z = cosmo.kpc_comoving_per_arcmin(z).to(u.Mpc / u.degree)
+                phys_rescale_factor = Mpc_per_deg_phys_zmin / Mpc_per_deg_phys_z
+                comov_rescale_factor= Mpc_per_deg_comov_zmin / Mpc_per_deg_comov_z
+                print(f"z={z}, physical rescaling factor is {phys_rescale_factor}, comoving rescale factor is {comov_rescale_factor}")
+                inz = (Cat.Z < (z + dz_rescale)) & (Cat.Z > (z - dz_rescale))
+                z_rescale_str = f"z_{(z - dz_rescale):.2f}_{(z + dz_rescale):.2f}"
+                z_group = reg_group.create_group(z_rescale_str)  # create a subgroup
+                # make the ChunkObj for these z
+                ChunkObj = Chunk(
+                    Cat.RA[in_reg & inz],
+                    Cat.DEC[in_reg & inz],
+                    Cat.alpha[in_reg & inz],
+                    Cat.x_asym[in_reg & inz],
+                    Cat.y_asym[in_reg & inz],
+                )
+                # find the physical and comoving rescaling factors
+                
+                # get the stack
+                stack_n, stack_n_phys, stack_n_comov = stackChunk(
+                    ChunkObj,
+                    imap,
+                    cutout_rad_deg.value,
+                    cutout_resolution.value,
+                    orient=orient,
+                    rescale_1 = phys_rescale_factor,
+                    rescale_2 = comov_rescale_factor,
+                )
+                # get the profiles
+                r_deg, Cr_ang, Sr_ang = radial_decompose_2D(stack_n, 5, (cutout_rad_deg / 2.0).value)
+                r_pMpc = r_deg * Mpc_per_deg_phys_z.value
+                r_cMpc = r_deg * Mpc_per_deg_comov_z.value
+                if z==minz:
+                    # save the 'base' r coordinates in comoving and physical size
+                    base_r_cMpc = r_cMpc
+                    base_r_pMpc = r_pMpc
+                    Cr_comov = Cr_phys = Cr_ang  # the profiles do not need to be cropped and rescaled
+                    Sr_comov = Sr_phys = Sr_ang
+                else:
+                    Cr_comov = rescale_prof(Cr_ang, r_cMpc, base_r_cMpc)
+                    Cr_phys  = rescale_prof(Cr_ang, r_pMpc, base_r_pMpc)
+                    Sr_comov = rescale_prof(Sr_ang, r_cMpc, base_r_cMpc)
+                    Sr_phys  = rescale_prof(Sr_ang, r_pMpc, base_r_pMpc)
+                # save to this delta-z subgroup
+                z_group.attrs["Nobj"]=ChunkObj.nObj
+                z_group.create_dataset("Cr_deg_profiles", data=Cr_ang)
+                z_group.create_dataset("Sr_deg_profiles", data=Sr_ang)
+                z_group.create_dataset("Cr_prop_profiles", data=Cr_phys)
+                z_group.create_dataset("Sr_prop_profiles", data=Sr_phys)
+                z_group.create_dataset("Cr_comov_profiles", data=Cr_comov)
+                z_group.create_dataset("Sr_comov_profiles", data=Sr_comov)
+                z_group.create_dataset("r_deg", data=r_deg)
+                z_group.create_dataset("r_prop_Mpc", data=r_pMpc)
+                z_group.create_dataset("r_comov_Mpc", data=r_cMpc)
+                z_group.create_dataset("stack_deg", data=stack_n)
+                z_group.create_dataset("stack_phys", data=stack_n_phys)
+                z_group.create_dataset("stack_comov", data=stack_n_comov)
+                z_group.create_dataset("RA", data=Cat.RA[in_reg & inz])
+                z_group.create_dataset("dec", data=Cat.DEC[in_reg & inz])
+                z_group.create_dataset("z", data=Cat.Z[in_reg & inz])
+                nobj_regn += ChunkObj.nObj
+            reg_group.attrs["Nobj"] = nobj_regn
+
+if use_mpi and size > 1:
+    # wait for the others to finish writing
+    comm.Barrier()
+    # collect all
+    if rank == 0 and size > 1:
+        import glob
+
+        with h5py.File(outfile, "w") as consol_f:
+            files = glob.glob(f"{savepath}/stacks_{stkpts_str}*{teststr}.h5")
+            for m in maps:
+                mappath = maps[m]["path"]
+                sn = maps[m]["shortname"]
+                consol_f.create_group(sn)
+                for fname in sorted(files):
+                    with h5py.File(fname, "r") as mpif:
+                        print(fname)
+                        if f'_0{teststr}.h5' in fname: # if the rank_0 file, copy over the attributes (only need to do once)
+                            consol_f.attrs["cutout_rad_deg"] = mpif.attrs["cutout_rad_deg"]
+                            consol_f.attrs["cutout_rad_cMpc"] = mpif.attrs["cutout_rad_cMpc"]
+                            consol_f.attrs["cutout_rad_pMpc"] = mpif.attrs["cutout_rad_pMpc"]
+                            consol_f[sn].attrs['map_path'] = mpif[sn].attrs['map_path']
+                        for group in mpif[sn].keys():
+                            print(mpif[sn][group].keys())
+                            mpif[sn].copy(mpif[sn][group], consol_f[sn], name=group)
+            for file in files:
+                print(f"Removing {file}")
+                os.remove(file)
+        print(f"Saved to {outfile}")
+else:
+    os.rename(f"{savepath}/stacks_{stkpts_str}_{rank}{teststr}.h5", outfile)
+    print(f"Saved to {outfile}")
+
