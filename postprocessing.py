@@ -136,8 +136,8 @@ class Stack:
     def set_average_profiles(
         self,
     ):  # Option to call this by hand, to reset the profile, if the weights have changed
-        self.avg_Cr_profiles = []
-        self.avg_Sr_profiles = []
+        self.Cr_avg_profiles = []
+        self.Sr_avg_profiles = []
         for m, Crprofsplits in enumerate(self.Cr_profile_splits):
             self.Cr_avg_profiles.append(
                 np.average(Crprofsplits, axis=0, weights=self.split_wgts)
@@ -169,7 +169,7 @@ class Stack:
         # rebin the mth multipole moment of the profiles
         custom_bins = np.asarray(custom_bins)
         custom_Cr_profile_m = [
-            np.average(self.avg_Cr_profiles[m][custom_bins[i] : custom_bins[i + 1]])
+            np.average(self.Cr_avg_profiles[m][custom_bins[i] : custom_bins[i + 1]])
             for i, bin in enumerate(custom_bins[:-1])
         ]
         self.Cr_avg_profiles_binned[m] = np.asarray(custom_Cr_profile_m)
@@ -314,14 +314,17 @@ def retrieve_stack_info(
         rtype = "r_comov_Mpc"
         stype = "cutout_rad_cMpc"
         stacktype = "stack_comov"
+        profstr = '_comov_profiles'
     elif format == "constant_physical":
         rtype = "r_prop_Mpc"
         stype = "cutout_rad_pMpc"
         stacktype = "stack_phys"
+        profstr = '_prop_profiles'
     elif format == "constant_angular":
         rtype = "r_deg"
         stype = "cutout_rad_deg"
         stacktype = "stack_deg"
+        profstr = '_deg_profiles'
     with h5.File(path, "r") as f:
         for map in f.keys():
             print("Stacks from the following maps available:", map)
@@ -349,8 +352,8 @@ def retrieve_stack_info(
                     collected_rs = True
                 thisreg_imgs.append(mapdata[reg][zbin][stacktype][:])
                 thisreg_wgts.append(mapdata[reg][zbin].attrs["Nobj"])
-                thisreg_cr_profs.append(mapdata[reg][zbin]["Cr_profiles"])
-                thisreg_sr_profs.append(mapdata[reg][zbin]["Sr_profiles"])
+                thisreg_cr_profs.append(mapdata[reg][zbin][f"Cr{profstr}"])
+                thisreg_sr_profs.append(mapdata[reg][zbin][f"Sr{profstr}"])
 
             thisreg_stack = np.average(
                 np.asarray(thisreg_imgs), weights=thisreg_wgts, axis=0
@@ -409,14 +412,13 @@ def plotstack(im_array, radius, vmin=-1e-7, vmax=1e-7, smooth=False, unit='cMpc'
     imhalf = im_array.shape[0]//2
     plt.axvline(imhalf, color='k')
     plt.axhline(imhalf, color='k')
-    locs = []
-    for i in range(9):
-        locs.append(i/8. * im_array.shape[0])
+    N = im_array.shape[0]
+    locs = np.linspace(0, N - 1, 9)
 
-    labels = []
-    units_per_pix = radius / (im_array.shape[0]//2)
-    for loc in locs:
-        labels.append("{:.1f}".format((loc-im_array.shape[0]//2) * units_per_pix))
+    
+    units_per_pix = radius / imhalf
+    labels = ["{:.1f}".format((l - imhalf) * units_per_pix) for l in locs]
+
 
     plt.xlabel(f"x [{unit}]")
     plt.ylabel(f"y [{unit}]")

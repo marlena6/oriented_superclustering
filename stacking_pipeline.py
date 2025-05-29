@@ -192,7 +192,7 @@ with h5py.File(f"{savepath}/stacks_{stkpts_str}_{rank}{teststr}.h5", "w") as f:
                     rescale_2 = comov_rescale_factor,
                 )
                 # get the profiles
-                r_deg, Cr_ang, Sr_ang = radial_decompose_2D(stack_n, 5, (cutout_rad_deg / 2.0).value)
+                r_deg, Cr_ang, Sr_ang = radial_decompose_2D(stack_n, 5, cutout_rad_deg.value)
                 r_pMpc = r_deg * Mpc_per_deg_phys_z.value
                 r_cMpc = r_deg * Mpc_per_deg_comov_z.value
                 if z==minz:
