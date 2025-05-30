@@ -26,27 +26,28 @@ else:
 # ALL ANALYSIS CHOICES COME BELOW
 ########################################################
 
-errors = False  # if true, split regions to get error estimates
-
+errors = True  # if true, split regions to get error estimates
+if errors:
+    nreg = 48  # number of chunks = number of processors to use
+else:
+    nreg = 1
+    
 # Describe the constraints on the input catalog
-constraint_str = "desi_lrgs_nugt2_egtpt3_smth10"
+constraint_str = "lrgs_zlim_elgclrgc_nu10gt2_e10gtpt3_o10_100pct_0.81_0.94"
 
-orient = "sym"  # options are "original", "random", "sym", "asym_x", "asym_y", "asym_xy"
+orient = "asym_xy"  # options are "original", "random", "sym", "asym_x", "asym_y", "asym_xy"
 
 cutout_rad = 20.0 * u.Mpc  # size of the cutout in comoving Mpc
-
-nreg = 48  # number of chunks = number of processors to use
-
-binsize = 10  # number of bins for statistics
 
 dz_rescale = 0.01  # size of z bins for rescaling
 
 savepath = "/mnt/scratch-lustre/mlokken/stacking/ACTxDESI/orient_by_desi_elgc+lrgc_100/stacks/enmap/"
 
 stack_pts_path = "/mnt/raid-cita/mlokken/data/desi/stacking_points/"
-stack_pts_file = "lrgs_zlim_elgclrgc_nu10gt2_e10gtpt3_o10_100pct_0.81_0.94.csv"
 
-test = True
+stack_pts_file = f"{constraint_str}.csv"
+
+test = False # if 'test', a smaller amount of objects will be run
 ########################################################
 
 if test:

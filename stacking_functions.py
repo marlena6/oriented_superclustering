@@ -4,7 +4,15 @@ from scipy.interpolate import RectBivariateSpline
 import sys
 
 
-def stackChunk(Chunk, imap, cutout_rad_deg, cutout_resolution_deg, orient, rescale_1=None, rescale_2=None):
+def stackChunk(
+    Chunk,
+    imap,
+    cutout_rad_deg,
+    cutout_resolution_deg,
+    orient,
+    rescale_1=None,
+    rescale_2=None,
+):
     # extract sample postage stamp around 0,0.
     # thumb_shape, thumb_wcs  = enmap.thumbnail_geometry(r=cutout_rad_deg*utils.degree, res=cutout_resolution_deg*utils.degree) # this gives non-square shape
     thumb_base = reproject.thumbnails(
@@ -103,10 +111,11 @@ def stackChunk(Chunk, imap, cutout_rad_deg, cutout_resolution_deg, orient, resca
 
             X_rot, Y_rot = np.dot(R, XY)
             stampMap = fun2D(X_rot, Y_rot, grid=False).reshape(resMap.shape)
-            if orient == "asymmetric":
+            if (orient == "asym_x") or (orient == "asym_xy"):
                 # add asymmetry
                 if Chunk.x_asym[iObj] == 1:
                     stampMap = np.fliplr(stampMap)
+            if (orient == "asym_y") or (orient == "asym_xy"):
                 if Chunk.y_asym[iObj] == 1:
                     stampMap = np.flipud(stampMap)
             del X_rot, Y_rot
@@ -128,13 +137,13 @@ def stackChunk(Chunk, imap, cutout_rad_deg, cutout_resolution_deg, orient, resca
         else:
             resMap2 = resMap
         nreturn += 1
-    if nreturn==1:
+    if nreturn == 1:
         return resMap
-    elif nreturn==2:
+    elif nreturn == 2:
         return (resMap, resMap1)
-    elif nreturn==3:
+    elif nreturn == 3:
         return (resMap, resMap1, resMap2)
-    
+
     # # dispatch each chunk of objects to a different processor
     # with sharedmem.MapReduce(np=ts.nProc) as pool:
     # resMap = np.array(pool.map(stackChunk, list(range(nChunk))))
@@ -158,13 +167,14 @@ class Chunk:
 
 
 def rescale_img(img, base_sidelen, ratio_to_base):
-    '''Crop an input image given a ratio, and rescale the result to match a base image
+    """Crop an input image given a ratio, and rescale the result to match a base image
     Args:
     img (np.ndarray): 2D array of input image data
     base_sidelen (int): Side length of base image
-    ratio_to_base (float): Ratio of 
-    '''
+    ratio_to_base (float): Ratio of
+    """
     from PIL import Image
+
     # for images centered on further distances, the same radius in degrees
     # corresponds to a larger transverse physical radius. Trim these images
     # to the same radius in Mpc as the first, then resize the array.
@@ -172,24 +182,27 @@ def rescale_img(img, base_sidelen, ratio_to_base):
     img_sidelen = img.shape[0]
     resized_sidelen = ratio_to_base * img_sidelen
     PilImg = Image.fromarray(img)
-    adjust = ((img_sidelen-resized_sidelen)/2.).value
-    CroppedImg = PilImg.crop((adjust, adjust, img_sidelen-adjust, img_sidelen-adjust))
+    adjust = ((img_sidelen - resized_sidelen) / 2.0).value
+    CroppedImg = PilImg.crop(
+        (adjust, adjust, img_sidelen - adjust, img_sidelen - adjust)
+    )
     pil_img_rs = CroppedImg.resize((base_sidelen, base_sidelen))
     resized = np.array(pil_img_rs)
     return resized
 
+
 def rescale_prof(prof_arr, r, base_r):
-    '''Crop an input image given a ratio, and rescale the result to match a base image
+    """Crop an input image given a ratio, and rescale the result to match a base image
     Args:
     img (np.ndarray): 2D array of input image data
     base_sidelen (int): Side length of base image
-    ratio_to_base (float): Ratio of 
-    '''
+    ratio_to_base (float): Ratio of
+    """
     from scipy.interpolate import interp1d
 
     # for profiles centered on further distances, the same radius in degrees
     # corresponds to a larger transverse physical radius. Trim these profiles
     # to the same radius in desired units as the first, then resize the array.
     prof_func = interp1d(r, prof_arr, axis=1)
-    resized   = prof_func(base_r)
+    resized = prof_func(base_r)
     return resized
