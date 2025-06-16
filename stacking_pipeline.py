@@ -51,7 +51,7 @@ test = False # if 'test', a smaller amount of objects will be run
 ########################################################
 
 if test:
-    nObj = 45000
+    nObj = 10000
     teststr = '_test'
 else:
     nObj = None
@@ -84,12 +84,10 @@ if rank == 0:
     labels = km.labels
     if size > 1:
         for i in range(1, size):
-            print(f"rank {rank}", labels.shape)
             comm.Send(labels, dest=i)
             print(f"sending labels to rank {i}")
 elif rank > 0:
     labels = np.empty(len(Cat.RA), dtype=np.int64)
-    print(f"rank {rank}", labels.shape)
     comm.Recv(labels, source=0)
     print(f"received labels on rank {rank}")
 Cat.labels = labels  # add labels to the Catalog object
@@ -161,6 +159,7 @@ with h5py.File(f"{savepath}/stacks_{stkpts_str}_{rank}{teststr}.h5", "w") as f:
             # make an HDF5 group for this region
             reg_group = map_group.create_group(f"reg_{n}")
             reg_group.attrs["Region"] = n
+            print(f"Analyzing region {n}")
             for z in np.linspace(
                 minz, maxz, int((maxz - minz) / dz_rescale)
             ):  # iterate through small z bins
@@ -168,7 +167,6 @@ with h5py.File(f"{savepath}/stacks_{stkpts_str}_{rank}{teststr}.h5", "w") as f:
                 Mpc_per_deg_comov_z = cosmo.kpc_comoving_per_arcmin(z).to(u.Mpc / u.degree)
                 phys_rescale_factor = Mpc_per_deg_phys_zmin / Mpc_per_deg_phys_z
                 comov_rescale_factor= Mpc_per_deg_comov_zmin / Mpc_per_deg_comov_z
-                print(f"z={z}, physical rescaling factor is {phys_rescale_factor}, comoving rescale factor is {comov_rescale_factor}")
                 inz = (Cat.Z < (z + dz_rescale)) & (Cat.Z > (z - dz_rescale))
                 z_rescale_str = f"z_{(z - dz_rescale):.2f}_{(z + dz_rescale):.2f}"
                 z_group = reg_group.create_group(z_rescale_str)  # create a subgroup
@@ -242,14 +240,12 @@ if use_mpi and size > 1:
                 consol_f.create_group(sn)
                 for fname in sorted(files):
                     with h5py.File(fname, "r") as mpif:
-                        print(fname)
                         if f'_0{teststr}.h5' in fname: # if the rank_0 file, copy over the attributes (only need to do once)
                             consol_f.attrs["cutout_rad_deg"] = mpif.attrs["cutout_rad_deg"]
                             consol_f.attrs["cutout_rad_cMpc"] = mpif.attrs["cutout_rad_cMpc"]
                             consol_f.attrs["cutout_rad_pMpc"] = mpif.attrs["cutout_rad_pMpc"]
                             consol_f[sn].attrs['map_path'] = mpif[sn].attrs['map_path']
                         for group in mpif[sn].keys():
-                            print(mpif[sn][group].keys())
                             mpif[sn].copy(mpif[sn][group], consol_f[sn], name=group)
             for file in files:
                 print(f"Removing {file}")

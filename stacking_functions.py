@@ -79,17 +79,10 @@ def stackChunk(
     X_lrg = ipos_lrg[0]
     Y_lrg = ipos_lrg[1][:, ::-1]  # flipping the order for use in scipy later
     x_lrg, y_lrg = X_lrg[:, 0], Y_lrg[0, :]
-    print(
-        "x_lrg shape is",
-        x_lrg.shape,
-        "y_lrg shape is",
-        y_lrg.shape,
-        "thumbnail shape is",
-        thumbs[0].shape,
-    )
+    
     for iObj in range(Chunk.nObj):
-        if iObj % 1000 == 0:
-            print("- analyze object", iObj)
+        # if iObj % 1000 == 0:
+        #     print("- analyze object", iObj)
         # if ts.overlapFlag[iObj]: # Re-implement this later
 
         # need to make sure it works for 'original' orientation too
@@ -106,8 +99,8 @@ def stackChunk(
             # enplot.show(enplot.plot(thumbs[iObj], colorbar=True, ticks=20))
 
             fun2D = RectBivariateSpline(x_lrg, y_lrg, thumbs[iObj], kx=1, ky=1)
-            # R = np.array([[ca, sa], [-sa, ca]]) # tested that this is the right?
-            R = np.array([[ca, -sa], [sa, ca]])  # TESTING!!!! I think mirror reflected
+            # R = np.array([[ca, sa], [-sa, ca]]) # Boryana's version (orientations defined wrt RA axis?)
+            R = np.array([[ca, -sa], [sa, ca]])  # COOP version (orientations defined wrt Dec axis?)
 
             X_rot, Y_rot = np.dot(R, XY)
             stampMap = fun2D(X_rot, Y_rot, grid=False).reshape(resMap.shape)
