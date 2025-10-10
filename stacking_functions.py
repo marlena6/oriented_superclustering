@@ -3,9 +3,19 @@ import numpy as np
 from scipy.interpolate import RectBivariateSpline
 import sys
 
+class Chunk:
+    def __init__(self, RA, DEC, alpha=None, x_asym=None, y_asym=None):
+        if len(RA) != len(DEC):
+            sys.exit("RA and Dec must have the same length.")
+        self.nObj = len(RA)
+        self.RA = RA
+        self.DEC = DEC
+        self.alpha = alpha
+        self.x_asym = x_asym
+        self.y_asym = y_asym
 
 def stackChunk(
-    Chunk,
+    iChunk,
     imap,
     cutout_rad_deg,
     cutout_resolution_deg,
@@ -13,6 +23,16 @@ def stackChunk(
     rescale_1=None,
     rescale_2=None,
 ):
+    # add a warning about arguments
+    if orient not in ["original", "random", "asym_x", "asym_y", "asym_xy"]:
+        sys.exit(
+            "orient must be one of 'original', 'random', 'asym_x', 'asym_y', or 'asym_xy'."
+        )
+    if rescale_2 is not None and rescale_1 is None:
+        sys.exit("If rescale_2 is specified, rescale_1 must also be specified.")
+    
+    # if not isinstance(iChunk, Chunk):
+    #     sys.exit("iChunk must be an instance of the Chunk class.")
     # extract sample postage stamp around 0,0.
     # thumb_shape, thumb_wcs  = enmap.thumbnail_geometry(r=cutout_rad_deg*utils.degree, res=cutout_resolution_deg*utils.degree) # this gives non-square shape
     thumb_base = reproject.thumbnails(
@@ -63,8 +83,8 @@ def stackChunk(
         seed = 3000
         np.random.seed(seed)  # randomized
     # get thumbnails for all the objects in the chunk
-    ra = Chunk.RA  # in deg
-    dec = Chunk.DEC  # in deg
+    ra = iChunk.RA  # in deg
+    dec = iChunk.DEC  # in deg
     # extract postage stamps around the objects. Need them to be larger than the cutout size (I think?)
     thumbs = reproject.thumbnails(
         imap,
@@ -80,7 +100,7 @@ def stackChunk(
     Y_lrg = ipos_lrg[1][:, ::-1]  # flipping the order for use in scipy later
     x_lrg, y_lrg = X_lrg[:, 0], Y_lrg[0, :]
     
-    for iObj in range(Chunk.nObj):
+    for iObj in range(iChunk.nObj):
         # if iObj % 1000 == 0:
         #     print("- analyze object", iObj)
         # if ts.overlapFlag[iObj]: # Re-implement this later
@@ -93,8 +113,8 @@ def stackChunk(
                 ca = np.cos(alpha)
                 sa = np.sin(alpha)
             else:
-                ca = np.cos(Chunk.alpha[iObj])  # cos(alpha)
-                sa = np.sin(Chunk.alpha[iObj])  # sin(alpha)
+                ca = np.cos(iChunk.alpha[iObj])  # cos(alpha)
+                sa = np.sin(iChunk.alpha[iObj])  # sin(alpha)
             # show the thumbnail
             # enplot.show(enplot.plot(thumbs[iObj], colorbar=True, ticks=20))
 
@@ -106,16 +126,16 @@ def stackChunk(
             stampMap = fun2D(X_rot, Y_rot, grid=False).reshape(resMap.shape)
             if (orient == "asym_x") or (orient == "asym_xy"):
                 # add asymmetry
-                if Chunk.x_asym[iObj] == 1:
+                if iChunk.x_asym[iObj] == 1:
                     stampMap = np.fliplr(stampMap)
             if (orient == "asym_y") or (orient == "asym_xy"):
-                if Chunk.y_asym[iObj] == 1:
+                if iChunk.y_asym[iObj] == 1:
                     stampMap = np.flipud(stampMap)
             del X_rot, Y_rot
         resMap += stampMap
 
         count += 1
-    resMap = resMap / Chunk.nObj
+    resMap = resMap / iChunk.nObj
     nreturn = 1
     # rescale if desired
     if rescale_1 is not None:
@@ -147,16 +167,6 @@ def stackChunk(
     # resMap *= norm
 
 
-class Chunk:
-    def __init__(self, RA, DEC, alpha=None, x_asym=None, y_asym=None):
-        if len(RA) != len(DEC):
-            sys.exit("RA and Dec must have the same length.")
-        self.nObj = len(RA)
-        self.RA = RA
-        self.DEC = DEC
-        self.alpha = alpha
-        self.x_asym = x_asym
-        self.y_asym = y_asym
 
 
 def rescale_img(img, base_sidelen, ratio_to_base):

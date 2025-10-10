@@ -399,7 +399,7 @@ def retrieve_stack_info(
     MyStack.bin_and_get_stats(binsize)  # Mpc
     return MyStack
 
-def plotstack(im_array, radius, vmin=-1e-7, vmax=1e-7, smooth=False, unit='cMpc', label="Compton-$y$"):
+def plotstack(im_array, radius, vmin=-1e-7, vmax=1e-7, smooth=False, unit='cMpc', label="Compton-$y$", grid=True):
     from scipy import ndimage
     import matplotlib.pyplot as plt
     fig    = plt.figure(figsize=[8,5])
@@ -408,10 +408,13 @@ def plotstack(im_array, radius, vmin=-1e-7, vmax=1e-7, smooth=False, unit='cMpc'
     else:
         toplot = im_array
     smoothplot = plt.imshow(toplot, origin='lower', cmap='afmhot', vmin=vmin, vmax=vmax)
-    plt.grid()
     imhalf = im_array.shape[0]//2
-    plt.axvline(imhalf, color='k')
-    plt.axhline(imhalf, color='k')
+    if grid:
+        plt.grid()
+        
+        plt.axvline(imhalf, color='k')
+        plt.axhline(imhalf, color='k')
+
     N = im_array.shape[0]
     locs = np.linspace(0, N - 1, 9)
 

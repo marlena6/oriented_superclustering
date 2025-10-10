@@ -51,7 +51,7 @@ def radial_decompose_2D(f, mmax, R):
     dtheta = 2 * np.pi / nsteps
     Cr = np.zeros((mmax, n - 1))
     Sr = np.zeros((mmax, n - 1))
-
+    
     for i in range(1, n):
         r = float(i)
         for j in range(nsteps):
@@ -71,6 +71,7 @@ def radial_decompose_2D(f, mmax, R):
             for m in range(1, mmax):
                 Cr[m, i - 1] = Cr[m, i - 1] + fv * np.cos(m * theta)
                 Sr[m, i - 1] = Sr[m, i - 1] + fv * np.sin(m * theta)
+    
 
     Cr[0, 0 : n - 1] = Cr[0, 0 : n - 1] / nsteps
     Cr[1:mmax, 0 : n - 1] = Cr[1:mmax, 0 : n - 1] * (2.0 / nsteps)

@@ -1,5 +1,6 @@
 import os
 import utils
+import numpy as np
 ##################################################################################
 ##################################################################################
 
@@ -31,11 +32,13 @@ class Catalog(object):
             if self.nObj is None:
                 self.nObj = len(data['RA'])
             # sky coordinates and redshift
-            self.RA = data['RA'][:self.nObj].to_numpy() # [deg]
-            self.DEC = data['DEC'][:self.nObj].to_numpy()  # [deg]
-            self.Z = data['Z'][:self.nObj].to_numpy()
-            self.alpha = data['alpha'][:self.nObj].to_numpy() # cos(alpha)
-            self.x_asym = data['x_asym'][:self.nObj].to_numpy() # 1 or -1
-            self.y_asym = data['y_asym'][:self.nObj].to_numpy() # 1 or -1
-            self.constraints = data['constraints'][:self.nObj].to_numpy()
+            # make random selection of nObj
+            rand_sel = np.random.choice(len(data['RA']), self.nObj, replace=False)
+            self.RA = data['RA'][rand_sel].to_numpy() # [deg]
+            self.DEC = data['DEC'][rand_sel].to_numpy()  # [deg]
+            self.Z = data['Z'][rand_sel].to_numpy()
+            self.alpha = data['alpha'][rand_sel].to_numpy() # cos(alpha)
+            self.x_asym = data['x_asym'][rand_sel].to_numpy() # 1 or -1
+            self.y_asym = data['y_asym'][rand_sel].to_numpy() # 1 or -1
+            self.constraints = data['constraints'][rand_sel].to_numpy()
             self.hdr = header
