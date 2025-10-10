@@ -38,7 +38,7 @@ else:
     nreg = 1
     
 # Describe the constraints on the input catalog
-constraint_str = "lrg11p2_lrg11p2_nu10gt2_e10gtpt3_o10_100pct_0.63_0.70"
+constraint_str = "lrg11p2_lrg11p2_nu10gt2_e10gtpt3_o10_100pct_0.95_1.05"
 
 orient = "asym_xy"  # options are "original", "random", "sym", "asym_x", "asym_y", "asym_xy"
 
@@ -70,8 +70,8 @@ else:
 maps = {
     "map1": {
         "type": "y",
-        "path": "/mnt/raid-cita/mlokken/data/flamingo/ComptonY_weakest_agn_enmap.fits",
-        "shortname": "fl_loagn",
+        "path": "/mnt/raid-cita/mlokken/data/flamingo/ComptonY_strongest_agn_enmap.fits",
+        "shortname": "fl_hiagn",
     }
 }
 

@@ -3,6 +3,7 @@ import numpy as np
 from scipy.interpolate import RectBivariateSpline
 import sys
 
+
 class Chunk:
     def __init__(self, RA, DEC, alpha=None, x_asym=None, y_asym=None):
         if len(RA) != len(DEC):
@@ -14,6 +15,7 @@ class Chunk:
         self.x_asym = x_asym
         self.y_asym = y_asym
 
+
 def stackChunk(
     iChunk,
     imap,
@@ -22,15 +24,32 @@ def stackChunk(
     orient,
     rescale_1=None,
     rescale_2=None,
+    angledef="CofDec",
 ):
+    """Stack a chunk of objects from a catalog onto an image, with various orientation options.
+
+    Args:
+        iChunk (Chunk): Chunk class instance containing RA, DEC, alpha, x_asym, y_asym
+        imap (pixell.enmap): Input map to stack onto
+        cutout_rad_deg (float): Radius of cutout in degrees
+        cutout_resolution_deg (float): Resolution of cutout in degrees
+        orient (str): One of 'original', 'random', 'sym', 'asym_x', 'asym_y', or 'asym_xy'
+        rescale_1 (float, optional): Scale factor for first rescaled output.
+        rescale_2 (float, optional): Scale factor for second rescaled output.
+        angledef (str, optional): Which direction & axis the orientation is defined with respect to.
+            Defaults to 'CCofRA' (counter clockwise of RA). Other option is 'CofDec' (clockwise of Dec).
+
+    Returns:
+        pixell.enmap or tuple: Stacked image, optionally with rescaled versions.
+    """
     # add a warning about arguments
-    if orient not in ["original", "random", "asym_x", "asym_y", "asym_xy"]:
+    if orient not in ["original", "random", "sym", "asym_x", "asym_y", "asym_xy"]:
         sys.exit(
-            "orient must be one of 'original', 'random', 'asym_x', 'asym_y', or 'asym_xy'."
+            "orient must be one of 'original', 'random', 'sym', 'asym_x', 'asym_y', or 'asym_xy'."
         )
     if rescale_2 is not None and rescale_1 is None:
         sys.exit("If rescale_2 is specified, rescale_1 must also be specified.")
-    
+
     # if not isinstance(iChunk, Chunk):
     #     sys.exit("iChunk must be an instance of the Chunk class.")
     # extract sample postage stamp around 0,0.
@@ -77,7 +96,6 @@ def stackChunk(
     th = np.arctan2(y_grid, x_grid)
     th[th < 0.0] += 2.0 * np.pi
 
-    count = 0
     want_random = False  # TESTING
     if want_random:
         seed = 3000
@@ -99,29 +117,36 @@ def stackChunk(
     X_lrg = ipos_lrg[0]
     Y_lrg = ipos_lrg[1][:, ::-1]  # flipping the order for use in scipy later
     x_lrg, y_lrg = X_lrg[:, 0], Y_lrg[0, :]
-    
+
     for iObj in range(iChunk.nObj):
         # if iObj % 1000 == 0:
         #     print("- analyze object", iObj)
         # if ts.overlapFlag[iObj]: # Re-implement this later
 
         # need to make sure it works for 'original' orientation too
-        if orient != "original":
-            # randomized
-            if orient == "random":
+        if orient == "original":
+            resMap += thumbs[iObj]
+        else:
+            if orient == "random":  # random orientation angles
                 alpha = np.random.rand() * 2.0 * np.pi
                 ca = np.cos(alpha)
                 sa = np.sin(alpha)
-            else:
-                ca = np.cos(iChunk.alpha[iObj])  # cos(alpha)
-                sa = np.sin(iChunk.alpha[iObj])  # sin(alpha)
+            elif orient in ["sym", "asym_x", "asym_y", "asym_xy"]:
+                ca = np.cos(iChunk.alpha[iObj])
+                sa = np.sin(iChunk.alpha[iObj])
             # show the thumbnail
             # enplot.show(enplot.plot(thumbs[iObj], colorbar=True, ticks=20))
 
             fun2D = RectBivariateSpline(x_lrg, y_lrg, thumbs[iObj], kx=1, ky=1)
-            # R = np.array([[ca, sa], [-sa, ca]]) # Boryana's version (orientations defined wrt RA axis?)
-            R = np.array([[ca, -sa], [sa, ca]])  # COOP version (orientations defined wrt Dec axis?)
-
+            if angledef == "CCofRA":
+                R = np.array([[ca, sa], [-sa, ca]]) # Boryana's version (orientations defined wrt RA axis, I think)
+            elif angledef == "CofDec":
+                R = np.array(
+                    [[ca, -sa], [sa, ca]]
+                )  # COOP version (orientations defined wrt Dec axis, but clockwise, I think)
+            else:
+                sys.exit("angledef must be one of 'CCofRA' or 'CofDec'.")
+                
             X_rot, Y_rot = np.dot(R, XY)
             stampMap = fun2D(X_rot, Y_rot, grid=False).reshape(resMap.shape)
             if (orient == "asym_x") or (orient == "asym_xy"):
@@ -134,7 +159,6 @@ def stackChunk(
             del X_rot, Y_rot
         resMap += stampMap
 
-        count += 1
     resMap = resMap / iChunk.nObj
     nreturn = 1
     # rescale if desired
@@ -165,8 +189,6 @@ def stackChunk(
     # resMap = np.sum(resMap, axis=0)
     # # normalize by the proper sum of weights
     # resMap *= norm
-
-
 
 
 def rescale_img(img, base_sidelen, ratio_to_base):
