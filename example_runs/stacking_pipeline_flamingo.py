@@ -14,10 +14,6 @@ import h5py
 from pathlib import Path
 import os
 import shutil
-
-# restart run from previous try?
-restart_run = False# make a new directory for all the inputs and outputs of this run, for bookkeeping
-newdir_name = "flhiagn_ex1000fast/"
     
 use_mpi = True
 if use_mpi:
@@ -32,6 +28,9 @@ else:
     size = 1
 # ALL ANALYSIS CHOICES COME BELOW
 ########################################################
+# restart run from previous try?
+restart_run = False# make a new directory for all the inputs and outputs of this run, for bookkeeping
+newdir_name = "flhiagn_ex1000fast/"
 
 errors = True  # if true, split regions to get error estimates
 if errors:
