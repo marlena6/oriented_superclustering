@@ -311,20 +311,14 @@ def retrieve_stack_info(
 
     print(f"retrieving data from {path}")
     if format == "constant_comoving":
-        rtype = "r_comov_Mpc"
         stype = "cutout_rad_cMpc"
         stacktype = "stack_comov"
-        profstr = '_comov_profiles'
     elif format == "constant_physical":
-        rtype = "r_prop_Mpc"
         stype = "cutout_rad_pMpc"
         stacktype = "stack_phys"
-        profstr = '_prop_profiles'
     elif format == "constant_angular":
-        rtype = "r_deg"
         stype = "cutout_rad_deg"
         stacktype = "stack_deg"
-        profstr = '_deg_profiles'
     with h5.File(path, "r") as f:
         for map in f.keys():
             print("Stacks from the following maps available:", map)
@@ -339,35 +333,21 @@ def retrieve_stack_info(
         wgts = []
         Crprofs = []
         Srprofs = []
-        collected_rs = False
         for reg in mapdata.keys():
             thisreg_imgs = []
             thisreg_wgts = []
-            thisreg_cr_profs = []
-            thisreg_sr_profs = []
             for zbin in mapdata[reg].keys():
-                if not collected_rs:
-                    # get some info from the first region, which will be the same for all
-                    r = mapdata[reg][zbin][rtype][:]
-                    collected_rs = True
                 thisreg_imgs.append(mapdata[reg][zbin][stacktype][:])
                 thisreg_wgts.append(mapdata[reg][zbin].attrs["Nobj"])
-                thisreg_cr_profs.append(mapdata[reg][zbin][f"Cr{profstr}"])
-                thisreg_sr_profs.append(mapdata[reg][zbin][f"Sr{profstr}"])
-
             thisreg_stack = np.average(
                 np.asarray(thisreg_imgs), weights=thisreg_wgts, axis=0
             )
-            thisreg_Crprof = np.average(
-                np.asarray(thisreg_cr_profs), weights=thisreg_wgts, axis=0
-            )
-            thisreg_Srprof = np.average(
-                np.asarray(thisreg_sr_profs), weights=thisreg_wgts, axis=0
-            )
             imgs.append(thisreg_stack)
             wgts.append(mapdata[reg].attrs["Nobj"])
-            Crprofs.append(thisreg_Crprof)
-            Srprofs.append(thisreg_Srprof)
+            print("Radial decompose region:", reg)
+            r, Cr, Sr = ss.radial_decompose_2D(thisreg_stack, 5, f.attrs[stype])
+            Crprofs.append(Cr)
+            Srprofs.append(Sr)
     Crprofs = np.array(Crprofs).transpose(1, 0, 2)
     Srprofs = np.array(Srprofs).transpose(1, 0, 2)
     if crop_center is not None:
@@ -399,7 +379,7 @@ def retrieve_stack_info(
     MyStack.bin_and_get_stats(binsize)  # Mpc
     return MyStack
 
-def plotstack(im_array, radius, vmin=-1e-7, vmax=1e-7, smooth=False, unit='cMpc', label="Compton-$y$", grid=True):
+def plotstack(im_array, radius, vmin=-1e-7, vmax=1e-7, smooth=False, unit='cMpc', label="Compton-$y$", grid=True, title=None):
     from scipy import ndimage
     import matplotlib.pyplot as plt
     fig    = plt.figure(figsize=[8,5])
@@ -427,7 +407,8 @@ def plotstack(im_array, radius, vmin=-1e-7, vmax=1e-7, smooth=False, unit='cMpc'
     plt.ylabel(f"y [{unit}]")
     plt.xticks(locs, labels)
     plt.yticks(locs, labels)
-
+    if title is not None:
+        plt.title(title)
     cbar = fig.colorbar(smoothplot)
     cbar.formatter.set_powerlimits((0, 0))
     cbar.set_label(label)

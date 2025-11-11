@@ -52,27 +52,43 @@ def radial_decompose_2D(f, mmax, R):
     Cr = np.zeros((mmax, n - 1))
     Sr = np.zeros((mmax, n - 1))
     
-    for i in range(1, n):
-        r = float(i)
-        for j in range(nsteps):
-            theta = dtheta * j
-            rx = r * np.cos(theta)
-            ry = r * np.sin(theta)
-            ix = int(min(np.floor(rx), n - 1))
-            iy = int(min(np.floor(ry), n - 1))
-            rx = rx - ix
-            ry = ry - iy
-            ix = ix + n
-            iy = iy + n
-            fv = (1 - rx) * (f[iy, ix] * (1 - ry) + f[iy + 1, ix] * ry) + rx * (
-                f[iy, ix + 1] * (1 - ry) + f[iy + 1, ix + 1] * ry
-            )
-            Cr[0, i - 1] += fv
-            for m in range(1, mmax):
-                Cr[m, i - 1] = Cr[m, i - 1] + fv * np.cos(m * theta)
-                Sr[m, i - 1] = Sr[m, i - 1] + fv * np.sin(m * theta)
-    
+    thetas = dtheta * np.arange(nsteps)
+    cos_t = np.cos(thetas)
+    sin_t = np.sin(thetas)
 
+    for i in range(1, n):
+        
+        r = float(i)
+        rx = r * cos_t
+        ry = r * sin_t
+ 
+        ix = np.minimum(np.floor(rx), n - 1).astype(int)
+        iy = np.minimum(np.floor(ry), n - 1).astype(int)
+ 
+        fx = rx - ix
+        fy = ry - iy
+        
+         # Shift indices by +n
+        ix += n
+        iy += n
+        
+        # Bilinear interpolation
+        f00 = f[iy, ix]
+        f01 = f[iy + 1, ix]
+        f10 = f[iy, ix + 1]
+        f11 = f[iy + 1, ix + 1]
+        fv = (1 - fx) * (f00 * (1 - fy) + f01 * fy) + fx * (f10 * (1 - fy) + f11 * fy)
+
+        Cr[0, i - 1] = fv.sum()
+        
+        # Higher harmonics (vectorized over m)
+        m_vals = np.arange(1, mmax)[:, None]  # shape (mmax-1, 1)
+        cos_mt = np.cos(m_vals * thetas)
+        sin_mt = np.sin(m_vals * thetas)
+        
+        Cr[1:, i - 1] = (fv * cos_mt).sum(axis=1)
+        Sr[1:, i - 1] = (fv * sin_mt).sum(axis=1)
+        
     Cr[0, 0 : n - 1] = Cr[0, 0 : n - 1] / nsteps
     Cr[1:mmax, 0 : n - 1] = Cr[1:mmax, 0 : n - 1] * (2.0 / nsteps)
     Sr[1:mmax, 0 : n - 1] = Sr[1:mmax, 0 : n - 1] * (2.0 / nsteps)

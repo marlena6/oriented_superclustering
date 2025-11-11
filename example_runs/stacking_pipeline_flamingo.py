@@ -1,4 +1,4 @@
-program_path = ".."
+program_path = "/home/mlokken/oriented_stacking/oriented_superclustering/"
 
 # import stuff from the parent directory (could update to be proper package later)
 import sys
@@ -9,14 +9,16 @@ import astropy.units as u
 from pixell import enmap
 import catalog
 from kmeans_radec import kmeans_sample
-from stacking_functions import Chunk, stackChunk, rescale_prof
-from stack_statistics import radial_decompose_2D
+from stacking_functions import Chunk, stackChunk
 import h5py
 from pathlib import Path
 import os
+import shutil
 
-
-
+# restart run from previous try?
+restart_run = False# make a new directory for all the inputs and outputs of this run, for bookkeeping
+newdir_name = "flhiagn_ex1000fast/"
+    
 use_mpi = True
 if use_mpi:
     from mpi4py import MPI
@@ -33,12 +35,12 @@ else:
 
 errors = True  # if true, split regions to get error estimates
 if errors:
-    nreg = 5  # number of chunks = number of processors to use
+    nreg = 3  # number of chunks = number of processors to use
 else:
     nreg = 1
     
 # Describe the constraints on the input catalog
-constraint_str = "lrg11p2_lrg11p2_nu10gt2_e10gtpt3_o10_100pct_0.95_1.05"
+constraint_str = "lrg11p2_elg2e-4+lrg11p2_nu10gt2_e10gtpt3_o10_100pct_0.95_1.05"
 
 orient = "asym_xy"  # options are "original", "random", "sym", "asym_x", "asym_y", "asym_xy"
 
@@ -46,7 +48,7 @@ cutout_rad = 20.0 * u.Mpc  # size of the cutout in comoving Mpc
 
 dz_rescale = 0.01  # size of z bins for rescaling
 
-savepath = "/mnt/scratch-lustre/mlokken/stacking/flamingo/orient_by_flam_lrg_11p2_100/stacks/enmap/"
+basepath = "/mnt/scratch-lustre/mlokken/stacking/flamingo/orient_by_flam_elg2e-4+lrg_11p2_100/stacks/enmap/"
 
 stack_pts_path = "/mnt/raid-cita/mlokken/data/flamingo/stacking_points/"
 
@@ -56,12 +58,23 @@ test = True # if 'test', a smaller amount of objects will be run
 ########################################################
 
 if test:
-    nObj = 10000
+    nObj = 1000
     teststr = f'_test{nObj:.1e}'
 else:
     nObj = None
     teststr = ''
     
+savepath = basepath + newdir_name + "/"
+# have rank 0 make the new directory, all others wait
+if rank == 0:
+    assert not os.path.exists(newdir_name) or restart_run, f"Directory {newdir_name} already exists. If you want to restart the run, set restart_run=True."
+    if not os.path.exists(savepath):
+        os.mkdir(savepath)
+        print(f"Created directory {savepath} for this run.")
+    if restart_run:
+        print(f"Restarting run in existing directory {savepath}.")
+if use_mpi and size > 1:
+    comm.Barrier()  # wait for rank 0 to finish making the directory
     
 # input the dictionary of maps to stack here
 # format should be "type":"path/to/map.fits"
@@ -70,7 +83,7 @@ else:
 maps = {
     "map1": {
         "type": "y",
-        "path": "/mnt/raid-cita/mlokken/data/flamingo/ComptonY_strongest_agn_enmap.fits",
+        "path": "/mnt/raid-cita/mlokken/data/flamingo/ComptonY_strongest_agn_enmap_res1a.fits",
         "shortname": "fl_hiagn",
     }
 }
@@ -90,7 +103,14 @@ assert not os.path.exists(outfile), f"Final output file already exists at: {outf
 
 # read the orientation information
 
+orientfile = stack_pts_path + stack_pts_file
 
+if rank == 0:
+    # save a copy of the orient file in the new directory for bookkeeping
+    shutil.copy(orientfile, savepath + stack_pts_file)
+    # save a copy of this script in the new directory for bookkeeping
+    shutil.copy(__file__, savepath + Path(__file__).name)
+    
 Cat = catalog.Catalog(
     name="standard",
     nameLong=constraint_str,
@@ -152,6 +172,10 @@ else:
 
 
 # Prepare to save to an HDF5 file
+file_i = f"{savepath}/stacks_{stkpts_str}_{rank}{teststr}.h5"
+if os.path.exists(file_i):
+    assert restart_run, f"File {file_i} already exists. If you want to restart the run, set restart_run=True."
+
 with h5py.File(f"{savepath}/stacks_{stkpts_str}_{rank}{teststr}.h5", "w") as f:
     f.attrs["cutout_rad_deg"]   = cutout_rad_deg.value
     f.attrs["cutout_rad_cMpc"] = cutout_rad_deg * Mpc_per_deg_comov_zmin.value
@@ -162,7 +186,7 @@ with h5py.File(f"{savepath}/stacks_{stkpts_str}_{rank}{teststr}.h5", "w") as f:
         map_group = f.create_group(sn)
         map_group.attrs['map_path'] = mappath
         print(f"Reading map {mappath}")
-        imap = enmap.read_map(maps[m]["path"])
+        # imap = enmap.read_map(maps[m]["path"])
         for i in range(nruns_local + extras):
             n = rank * nruns_local + i
             in_reg = Cat.labels == n
@@ -189,8 +213,10 @@ with h5py.File(f"{savepath}/stacks_{stkpts_str}_{rank}{teststr}.h5", "w") as f:
                     Cat.x_asym[in_reg & inz],
                     Cat.y_asym[in_reg & inz],
                 )
-                # find the physical and comoving rescaling factors
-                
+                # define the map edges for this region
+                lowra, highra = np.amin(Cat.RA[in_reg])-cutout_rad_deg.value, np.amax(Cat.RA[in_reg])+cutout_rad_deg.value
+                lowdec, highdec = np.amin(Cat.DEC[in_reg])-cutout_rad_deg.value, np.amax(Cat.DEC[in_reg])+cutout_rad_deg.value
+                imap = enmap.read_map(maps[m]["path"], box=[[np.radians(lowdec),np.radians(lowra)],[np.radians(highdec),np.radians(highra)]])
                 # get the stack
                 print("Stacking region", n, "at z", z)
                 stack_n, stack_n_phys, stack_n_comov = stackChunk(
@@ -202,33 +228,8 @@ with h5py.File(f"{savepath}/stacks_{stkpts_str}_{rank}{teststr}.h5", "w") as f:
                     rescale_1 = phys_rescale_factor,
                     rescale_2 = comov_rescale_factor,
                 )
-                # get the profiles
-                print("Calculating the multipoles of the stack.")
-                r_deg, Cr_ang, Sr_ang = radial_decompose_2D(stack_n, 5, cutout_rad_deg.value)
-                r_pMpc = r_deg * Mpc_per_deg_phys_z.value
-                r_cMpc = r_deg * Mpc_per_deg_comov_z.value
-                if z==minz:
-                    # save the 'base' r coordinates in comoving and physical size
-                    base_r_cMpc = r_cMpc
-                    base_r_pMpc = r_pMpc
-                    Cr_comov = Cr_phys = Cr_ang  # the profiles do not need to be cropped and rescaled
-                    Sr_comov = Sr_phys = Sr_ang
-                else:
-                    Cr_comov = rescale_prof(Cr_ang, r_cMpc, base_r_cMpc)
-                    Cr_phys  = rescale_prof(Cr_ang, r_pMpc, base_r_pMpc)
-                    Sr_comov = rescale_prof(Sr_ang, r_cMpc, base_r_cMpc)
-                    Sr_phys  = rescale_prof(Sr_ang, r_pMpc, base_r_pMpc)
                 # save to this delta-z subgroup
                 z_group.attrs["Nobj"]=ChunkObj.nObj
-                z_group.create_dataset("Cr_deg_profiles", data=Cr_ang)
-                z_group.create_dataset("Sr_deg_profiles", data=Sr_ang)
-                z_group.create_dataset("Cr_prop_profiles", data=Cr_phys)
-                z_group.create_dataset("Sr_prop_profiles", data=Sr_phys)
-                z_group.create_dataset("Cr_comov_profiles", data=Cr_comov)
-                z_group.create_dataset("Sr_comov_profiles", data=Sr_comov)
-                z_group.create_dataset("r_deg", data=r_deg)
-                z_group.create_dataset("r_prop_Mpc", data=r_pMpc)
-                z_group.create_dataset("r_comov_Mpc", data=r_cMpc)
                 z_group.create_dataset("stack_deg", data=stack_n)
                 z_group.create_dataset("stack_phys", data=stack_n_phys)
                 z_group.create_dataset("stack_comov", data=stack_n_comov)
