@@ -113,7 +113,7 @@ def CAP_2D(f, R):
     x_coords = np.linspace(xy_min, xy_max, cols)
     y_coords = np.linspace(xy_min, xy_max, rows)
 
-    # pixel_size = (x_coords[1] - x_coords[0])
+    pixel_size = (x_coords[1] - x_coords[0])
     # pixArea = (pixel_size)**2
 
     # Create meshgrid of coordinates
@@ -122,7 +122,7 @@ def CAP_2D(f, R):
     # Calculate distances from the center (0,0)
     radial_distances = np.sqrt(X**2 + Y**2)
 
-    r_vals = np.linspace(0, R/np.sqrt(2.0), 20)
+    r_vals = np.linspace(pixel_size, R/np.sqrt(2.0), 20)
     CAP_vals = np.zeros_like(r_vals)
     for i, r in enumerate(r_vals):
         r1 = r * 0.5
