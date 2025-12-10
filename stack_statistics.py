@@ -94,6 +94,45 @@ def radial_decompose_2D(f, mmax, R):
     Sr[1:mmax, 0 : n - 1] = Sr[1:mmax, 0 : n - 1] * (2.0 / nsteps)
     return (r_coords, Cr, Sr)
 
+def CAP_2D(f, R):
+    """
+    Args:
+    f (np.ndarray): image array, one image.
+    mmax (int): maximum m for decomposition (maximally 10)
+    R (float): half-side-length of image in physical units
+
+    Returns:
+    r (np.ndarray): vector of r in units of R
+    CAP(r) (np.ndarray): vector of CAP values in units of R
+    """
+    
+    rows, cols = f.shape
+    xy_min, xy_max = (-R, R)
+
+    # Generate coordinate values for each axis
+    x_coords = np.linspace(xy_min, xy_max, cols)
+    y_coords = np.linspace(xy_min, xy_max, rows)
+
+    # pixel_size = (x_coords[1] - x_coords[0])
+    # pixArea = (pixel_size)**2
+
+    # Create meshgrid of coordinates
+    X, Y = np.meshgrid(x_coords, y_coords)
+
+    # Calculate distances from the center (0,0)
+    radial_distances = np.sqrt(X**2 + Y**2)
+
+    r_vals = np.linspace(0, R/np.sqrt(2.0), 20)
+    CAP_vals = np.zeros_like(r_vals)
+    for i, r in enumerate(r_vals):
+        r1 = r * 0.5
+    
+        inDisk = 1.0 * (radial_distances <= r)
+        inRing = 1.0 * (radial_distances > r) * (radial_distances <= r1)
+        inRing *= np.sum(inDisk) / np.sum(inRing)
+        CAP_vals[i] = float(np.sum((inDisk - inRing) * f))
+    return (r_vals, CAP_vals)
+
 
 def total_multipole_power(
     m_max, img=None, R=None, cos_moments=None, sin_moments=None, r=None
