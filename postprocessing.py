@@ -337,8 +337,19 @@ def retrieve_stack_info(
             thisreg_imgs = []
             thisreg_wgts = []
             for zbin in mapdata[reg].keys():
-                thisreg_imgs.append(mapdata[reg][zbin][stacktype][:])
-                thisreg_wgts.append(mapdata[reg][zbin].attrs["Nobj"])
+                if np.any(np.isnan(mapdata[reg][zbin][stacktype][:])):
+                    print(
+                        "NaN detected in region",
+                        reg,
+                        "redshift bin",
+                        zbin,
+                        "; skipping this bin.",
+                    )
+                else:
+                    thisreg_imgs.append(mapdata[reg][zbin][stacktype][:])
+                    thisreg_wgts.append(mapdata[reg][zbin].attrs["Nobj"])
+                
+                    
             thisreg_stack = np.average(
                 np.asarray(thisreg_imgs), weights=thisreg_wgts, axis=0
             )
@@ -379,7 +390,7 @@ def retrieve_stack_info(
     MyStack.bin_and_get_stats(binsize)  # Mpc
     return MyStack
 
-def plotstack(im_array, radius, vmin=-1e-7, vmax=1e-7, smooth=False, unit='cMpc', label="Compton-$y$", grid=True, title=None):
+def plotstack(im_array, radius, vmin=-1e-7, vmax=1e-7, smooth=False, unit='cMpc', label="Compton-$y$", grid=True, title=None, subtract_average=False):
     from scipy import ndimage
     import matplotlib.pyplot as plt
     fig    = plt.figure(figsize=[8,5])
@@ -387,6 +398,8 @@ def plotstack(im_array, radius, vmin=-1e-7, vmax=1e-7, smooth=False, unit='cMpc'
         toplot = ndimage.gaussian_filter(im_array, sigma=8)
     else:
         toplot = im_array
+    if subtract_average:
+        toplot = toplot - get_annulus(im_array)
     smoothplot = plt.imshow(toplot, origin='lower', cmap='afmhot', vmin=vmin, vmax=vmax)
     imhalf = im_array.shape[0]//2
     if grid:
@@ -414,3 +427,25 @@ def plotstack(im_array, radius, vmin=-1e-7, vmax=1e-7, smooth=False, unit='cMpc'
     cbar.set_label(label)
     cbar.update_ticks()
     return toplot
+
+
+def get_annulus(image):
+    center = [int(image.shape[0]/2), int(image.shape[1]/2)]
+    # R1 and R2 vary with image size
+    # R1 is 1/2 of way from center of image
+    R1   = int(center[0]/2.)
+    # R2 is 3/4 of way from center of image
+    R2   = int(3*center[1]/4.)
+    imin = center[0] - R2
+    imax = center[0] + R2 + 1
+    jmin = center[1] - R2
+    jmax = center[1] + R2 + 1
+    target = []
+    for i in np.arange(imin, imax):
+        for j in np.arange(jmin, jmax):
+            ij = np.array([i,j])
+            dist = np.linalg.norm(ij - np.array(center))
+            if dist > R1 and dist <= R2:
+                target.append(image[i][j])
+    target = np.array(target)
+    return np.average(target)

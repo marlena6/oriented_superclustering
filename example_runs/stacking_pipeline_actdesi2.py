@@ -29,17 +29,17 @@ else:
 # ALL ANALYSIS CHOICES COME BELOW
 ########################################################
 # restart run from previous try?
-restart_run = False
-newdir_name = "flhiagn_debug/" # make a new directory for all the inputs and outputs of this run, for bookkeeping
+restart_run = True
+newdir_name = "actdesi_lrgs_hiz_dec7/" # make a new directory for all the inputs and outputs of this run, for bookkeeping
 
-errors = False  # if true, split regions to get error estimates
+errors = True  # if true, split regions to get error estimates
 if errors:
-    nreg = 3  # number of chunks = number of processors to use
+    nreg = 48  # number of chunks = number of processors to use
 else:
     nreg = 1
     
 # Describe the constraints on the input catalog
-constraint_str = "lrg11p2_lrg11p2_nu10gt2_e10gtpt3_o10_100pct_0.67_0.7"
+constraint_str = "lrgc_nocut_lrgc_nu10gt2_e10gtpt3_o10_100pct_0.9_0.95"
 
 orient = "asym_xy"  # options are "original", "random", "sym", "asym_x", "asym_y", "asym_xy"
 
@@ -47,9 +47,9 @@ cutout_rad = 20.0 * u.Mpc  # size of the cutout in comoving Mpc
 
 dz_rescale = 0.01  # size of z bins for rescaling
 
-basepath = "/mnt/scratch-lustre/mlokken/stacking/flamingo/orient_by_flam_lrg_11p2_100/stacks/enmap/"
+basepath = "/mnt/scratch-lustre/mlokken/stacking/ACTxDESI/orient_by_desi_lrgc_100/stacks/enmap/"
 
-stack_pts_path = "/mnt/raid-cita/mlokken/data/flamingo/stacking_points/"
+stack_pts_path = "/mnt/raid-cita/mlokken/data/desi/stacking_points/"
 
 stack_pts_file = f"{constraint_str}.csv"
 
@@ -57,7 +57,7 @@ test = False # if 'test', a smaller amount of objects will be run
 ########################################################
 
 if test:
-    nObj = 1000
+    nObj = 10000
     teststr = f'_test{nObj:.1e}'
 else:
     nObj = None
@@ -82,8 +82,8 @@ if use_mpi and size > 1:
 maps = {
     "map1": {
         "type": "y",
-        "path": "/mnt/raid-cita/mlokken/data/flamingo/ymaps/ComptonY_strongest_agn_enmap_res1a.fits",
-        "shortname": "fl_hiagn",
+        "path": "/mnt/raid-cita/mlokken/data/act_ymaps/ilc_SZ_yy.fits",
+        "shortname": "ACT_y_fid",
     }
 }
 
