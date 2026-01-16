@@ -115,25 +115,63 @@ def CAP_2D(f, R):
 
     pixel_size = (x_coords[1] - x_coords[0])
     # pixArea = (pixel_size)**2
-
+    
     # Create meshgrid of coordinates
     X, Y = np.meshgrid(x_coords, y_coords)
-
     # Calculate distances from the center (0,0)
     radial_distances = np.sqrt(X**2 + Y**2)
 
     r_vals = np.linspace(pixel_size, R/np.sqrt(2.0), 20)
     CAP_vals = np.zeros_like(r_vals)
     for i, r in enumerate(r_vals):
-        r1 = r * 0.5
-    
+        r1 = r * np.sqrt(2)
         inDisk = 1.0 * (radial_distances <= r)
         inRing = 1.0 * (radial_distances > r) * (radial_distances <= r1)
         inRing *= np.sum(inDisk) / np.sum(inRing)
         CAP_vals[i] = float(np.sum((inDisk - inRing) * f))
     return (r_vals, CAP_vals)
 
+def CAP_2D_multipole(f, mmax, R):
+    import matplotlib.pyplot as plt
+    rows, cols = f.shape
+    xy_min, xy_max = (-R, R)
 
+    # Generate coordinate values for each axis
+    x_coords = np.linspace(xy_min, xy_max, cols)
+    y_coords = np.linspace(xy_min, xy_max, rows)
+
+    pixel_size = (x_coords[1] - x_coords[0])
+    # pixArea = (pixel_size)**2
+    
+    # Create meshgrid of coordinates
+    X, Y = np.meshgrid(x_coords, y_coords)
+    # Calculate distances from the center (0,0)
+    radial_distances = np.sqrt(X**2 + Y**2)
+
+    phi = np.arctan2(Y, X) # angle in radians
+    
+    r_vals = np.linspace(pixel_size, R/np.sqrt(2.0), 20)
+    
+    capcos_per_m = []
+    capsin_per_m = []
+    for m in range(0, mmax+1):
+        cosmphi = np.cos(m*phi)*f # get the image modulated by cos(m*phi)
+        sinmphi = np.sin(m*phi)*f # get the image modulated by sin(m*phi)
+        CAP_vals_cos = np.zeros_like(r_vals)
+        CAP_vals_sin = np.zeros_like(r_vals)
+        for i, r in enumerate(r_vals):
+            r1 = r * np.sqrt(2)
+            inDisk = 1.0 * (radial_distances <= r)
+            inRing = 1.0 * (radial_distances > r) * (radial_distances <= r1)
+            inRing *= np.sum(inDisk) / np.sum(inRing)
+            CAP_vals_cos[i] = float(np.sum((inDisk - inRing) * cosmphi))
+            CAP_vals_sin[i] = float(np.sum((inDisk - inRing) * sinmphi))
+        capcos_per_m.append(CAP_vals_cos)
+        capsin_per_m.append(CAP_vals_sin)
+    return r_vals, np.array(capcos_per_m), np.array(capsin_per_m)
+
+    
+    
 def total_multipole_power(
     m_max, img=None, R=None, cos_moments=None, sin_moments=None, r=None
 ):
