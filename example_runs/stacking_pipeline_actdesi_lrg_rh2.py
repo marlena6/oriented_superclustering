@@ -30,9 +30,9 @@ else:
 # ALL ANALYSIS CHOICES COME BELOW
 ########################################################
 # restart run from previous try?
-restart_run = False# make a new directory for all the inputs and outputs of this run, for bookkeeping
+restart_run = True# make a new directory for all the inputs and outputs of this run, for bookkeeping
 #newdir_name = "flhiagn_ex1000fast/"
-newdir_name = "test/"
+newdir_name = "nu10gt2_e10gtpt3_o10_100pct/"
 
 errors = False  # if true, split regions to get error estimates
 if errors:
@@ -49,7 +49,6 @@ orient = "asym_xy"  # options are "original", "random", "sym", "asym_x", "asym_y
 cutout_rad = 20.0 * u.Mpc  # size of the cutout in comoving Mpc
 
 dz_rescale = 0.01  # size of z bins for rescaling
-
 savepath = "/pscratch/sd/r/rhlozek/stacking/ACTxDESI/orient_by_desi_lrgc_100/stacks/enmap/"
 
 stack_pts_path = "/pscratch/sd/r/rhlozek/oriented_superclustering/constraint_files/"
