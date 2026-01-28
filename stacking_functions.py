@@ -1,8 +1,8 @@
-from pixell import reproject, enmap, utils
+from pixell import reproject, enmap, utils, enplot
 import numpy as np
 from scipy.interpolate import RectBivariateSpline
 import sys
-
+import matplotlib.pyplot as plt
 
 class Chunk:
     def __init__(self, RA, DEC, alpha=None, x_asym=None, y_asym=None):
@@ -54,6 +54,7 @@ def stackChunk(
     #     sys.exit("iChunk must be an instance of the Chunk class.")
     # extract sample postage stamp around 0,0.
     # thumb_shape, thumb_wcs  = enmap.thumbnail_geometry(r=cutout_rad_deg*utils.degree, res=cutout_resolution_deg*utils.degree) # this gives non-square shape
+    
     thumb_base = reproject.thumbnails(
         imap,
         coords=np.deg2rad([0, 0]).T,
@@ -62,6 +63,7 @@ def stackChunk(
         method="spline",
         order=1,
     )
+    
     thumb_shape, thumb_wcs = thumb_base.shape, thumb_base.wcs
     # get the thumbnails
     resMap = enmap.zeros(thumb_shape, thumb_wcs)  # initialize
@@ -104,6 +106,7 @@ def stackChunk(
     ra = iChunk.RA  # in deg
     dec = iChunk.DEC  # in deg
     # extract postage stamps around the objects. Need them to be larger than the cutout size (I think?)
+    # print("before all thumbs")
     thumbs = reproject.thumbnails(
         imap,
         coords=np.deg2rad([dec, ra]).T,
@@ -112,6 +115,23 @@ def stackChunk(
         method="spline",
         order=1,
     )  # ('tan')
+    
+    # print("after all thumbs")
+    # print(f"found {thumbs.shape[0]} thumbnails out of {iChunk.nObj} objects")
+    # for it, thumb in enumerate(thumbs):
+    #     if np.any(np.isnan(np.mean(thumbs[it],(-2,-1))[...,None,None])):
+    #         print(f"Thumbnail {it} at RA, dec = {iChunk.RA[it]}, {iChunk.DEC[it]} contains NaNs.")
+    #         plt.imshow(thumb)
+    #         plt.savefig(f"testing/thumb{it}.png")
+            
+    # sys.exit("stop here")
+        # show the thumbnail
+            # print(f"Object {iObj} is at RA: {iChunk.RA[iObj]}, Dec: {iChunk.DEC[iObj]}, alpha: {iChunk.alpha[iObj]}")
+            # plt.imshow(thumbs[iObj])
+            # # enplot.show(enplot.plot(thumbs[iObj], colorbar=True, ticks=20))
+            # plt.savefig(f"testing/thumb{iObj}.png")
+            # plt.clf()
+        
     # radian positions of each pixel
     ipos_lrg = thumbs[0].posmap()
     X_lrg = ipos_lrg[0]
@@ -134,9 +154,7 @@ def stackChunk(
             elif orient in ["sym", "asym_x", "asym_y", "asym_xy"]:
                 ca = np.cos(iChunk.alpha[iObj])
                 sa = np.sin(iChunk.alpha[iObj])
-            # show the thumbnail
-            # enplot.show(enplot.plot(thumbs[iObj], colorbar=True, ticks=20))
-
+            
             fun2D = RectBivariateSpline(x_lrg, y_lrg, thumbs[iObj], kx=1, ky=1)
             if angledef == "CCofRA":
                 R = np.array([[ca, sa], [-sa, ca]]) # Boryana's version (orientations defined wrt RA axis, I think)

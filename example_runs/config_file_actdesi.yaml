@@ -1,0 +1,54 @@
+# ===============================
+# MPI / execution settings
+# ===============================
+mpi:
+  use_mpi: true
+
+# ===============================
+# Run control
+# ===============================
+run:
+  restart_run: false
+  newdir_name: "actdesi_lrgs_p7_p75_jan27/"
+  test: false
+  nObj_test: 1000   # only used if test=true
+
+# ===============================
+# Error estimation
+# ===============================
+errors:
+  enabled: true
+  nreg: 3   # number of regions if enabled
+
+# ===============================
+# Input catalog constraints
+# ===============================
+catalog:
+  constraint_str: "lrgc_nocut_lrgc_nu10gt2_e10gtpt3_o10_100pct_0.7_1.0"
+
+# ===============================
+# Stacking / analysis options
+# ===============================
+analysis:
+  orient: "asym_xy"   # options: original, random, sym, asym_x, asym_y, asym_xy
+  cutout_rad_mpc: 20.0
+  dz_rescale: 0.01
+  zmin: 0.7 # define if you want to limit the redshift range smaller than that in the catalog
+  zmax: 0.75
+
+# ===============================
+# Paths
+# ===============================
+paths:
+  basepath: "/mnt/scratch-lustre/mlokken/stacking/ACTxDESI/orient_by_desi_lrgc_100/stacks/enmap/"
+  stack_pts_path: "/mnt/raid-cita/mlokken/data/desi/stacking_points/"
+
+# ===============================
+# Maps to stack
+# ===============================
+maps:
+  map1:
+    type: "y"
+    path: "/mnt/raid-cita/mlokken/data/act_ymaps/ilc_SZ_yy.fits"
+    shortname: "ACT_y_fid"
+
