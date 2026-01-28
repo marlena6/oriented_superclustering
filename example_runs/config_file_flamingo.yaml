@@ -1,0 +1,53 @@
+# ===============================
+# MPI / execution settings
+# ===============================
+mpi:
+  use_mpi: true
+
+# ===============================
+# Run control
+# ===============================
+run:
+  restart_run: false
+  newdir_name: "fl_hiagn_p65_p7/"
+  test: false
+  nObj_test: 1000   # only used if test=true
+
+# ===============================
+# Error estimation
+# ===============================
+errors:
+  enabled: false
+  nreg: 3   # number of regions if enabled
+
+# ===============================
+# Input catalog constraints
+# ===============================
+catalog:
+  constraint_str: "lrg11p2_lrg11p2_nu10gt2_e10gtpt3_o10_100pct_0.65_0.7"
+
+# ===============================
+# Stacking / analysis options
+# ===============================
+analysis:
+  orient: "asym_xy"   # options: original, random, sym, asym_x, asym_y, asym_xy
+  cutout_rad_mpc: 20.0
+  dz_rescale: 0.01
+  zmin: null # define if you want to limit the redshift range smaller than that in the catalog
+  zmax: null
+  
+# ===============================
+# Paths
+# ===============================
+paths:
+  basepath: "/mnt/scratch-lustre/mlokken/stacking/flamingo/orient_by_flam_lrg_11p2_100/stacks/enmap/"
+  stack_pts_path: "/mnt/raid-cita/mlokken/data/flamingo/stacking_points/"
+
+# ===============================
+# Maps to stack
+# ===============================
+maps:
+  map1:
+    type: "y"
+    path: "/mnt/raid-cita/mlokken/data/flamingo/ymaps/ComptonY_strongest_agn_enmap_res1a.fits"
+    shortname: "fl_hiagn"

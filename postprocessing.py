@@ -299,7 +299,8 @@ def retrieve_stack_info(
     binsize=2,
     crop_center=2.0,
     r_m0_normalization=None,
-    mapchoice='default'
+    mapchoice='default',
+    cap_filter=False
 ):
     """
     Args:
@@ -356,7 +357,10 @@ def retrieve_stack_info(
             imgs.append(thisreg_stack)
             wgts.append(mapdata[reg].attrs["Nobj"])
             print("Radial decompose region:", reg)
-            r, Cr, Sr = ss.radial_decompose_2D(thisreg_stack, 5, f.attrs[stype])
+            if cap_filter:
+                r, Cr, Sr   = ss.CAP_2D_multipole(thisreg_stack, 5, f.attrs[stype])
+            else:
+                r, Cr, Sr = ss.radial_decompose_2D(thisreg_stack, 5, f.attrs[stype])
             Crprofs.append(Cr)
             Srprofs.append(Sr)
     Crprofs = np.array(Crprofs).transpose(1, 0, 2)
