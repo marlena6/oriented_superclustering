@@ -47,11 +47,13 @@ else:
     nObj = None
     teststr = ""
 errors = cfg["errors"]["enabled"]
-
+# make sure errors = False corresponds to size = 1 and errors = True corresponds to nreg > 1
 if errors:
     nreg = cfg["errors"]["nreg"]
+    assert nreg > 1, "nreg must be > 1 when errors are enabled."
 else:
     nreg = 1
+    assert size == 1, "MPI size must be 1 when errors are disabled."
 
 constraint_str = cfg["catalog"]["constraint_str"]
 orient = cfg["analysis"]["orient"]
@@ -59,6 +61,11 @@ cutout_rad = cfg["analysis"]["cutout_rad_mpc"] * u.Mpc
 dz_rescale = cfg["analysis"]["dz_rescale"]
 zmin = cfg["analysis"]["zmin"]
 zmax = cfg["analysis"]["zmax"]
+
+if zmin in ["None","none",None, ""]:
+    zmin = None
+if zmax in ["None","none",None, ""]:
+    zmax = None
 basepath = cfg["paths"]["basepath"]
 stack_pts_path = cfg["paths"]["stack_pts_path"]
 stack_pts_file = f"{constraint_str}" if f"{constraint_str}".endswith(".csv") else f"{constraint_str}.csv"
@@ -79,17 +86,7 @@ if use_mpi and size > 1:
 
 maps = cfg["maps"]
 stkpts_str = Path(stack_pts_file).stem
-if len(maps) == 1:
-    outfile = (
-        f"{savepath}/{maps['map1']['shortname']}_consol_stacks_z{zmin:.2f}_{zmax:.2f}_{stkpts_str}{teststr}.h5"
-    )
-else:
-    print("Not yet implemented.")
 
-# Make sure the output file doesn't already exist
-if rank == 0:
-    print("Will save to", outfile)
-assert not os.path.exists(outfile), f"Final output file already exists at: {outfile}"
 
 # add some function here to check if each map is an enmap, and convert from healpix to enmap otherwise
 
@@ -115,26 +112,39 @@ if rank == 0:
 
 if rank==0:
     # read the catalog
-    Cat = catalog.Catalog(
+    cat = catalog.Catalog(
         name="standard",
         nameLong=constraint_str,
         pathInCatalog=stack_pts_path + stack_pts_file,
         nObj=nObj,
     )
-    print("Analyzing catalog of length", len(Cat.Z))
+    print("Analyzing catalog of length", len(cat.Z))
     if size > 1:
             for i in range(1, size):
-                comm.send(Cat, dest=i)
+                comm.send(cat, dest=i)
                 print(f"sending catalog to rank {i}")
 elif rank > 0:
-    Cat = comm.recv(source=0)
-    print(f"received catalog on rank {rank} of length", len(Cat.Z))
+    cat = comm.recv(source=0)
+    print(f"received catalog on rank {rank} of length", len(cat.Z))
     
 if zmin is None:
-    zmin = np.amin(Cat.Z)
+    zmin = np.amin(cat.Z)
 if zmax is None:
-    zmax = np.amax(Cat.Z)
+    zmax = np.amax(cat.Z)
 print(f"Redshift range to stack: {zmin:.3f} - {zmax:.3f}")
+
+if len(maps) == 1:
+    outfile = (
+        f"{savepath}/{maps['map1']['shortname']}_consol_stacks_z{zmin:.2f}_{zmax:.2f}_{stkpts_str}{teststr}.h5"
+    )
+else:
+    print("Not yet implemented.")
+
+# Make sure the output file doesn't already exist
+if rank == 0:
+    print("Will save to", outfile)
+assert not os.path.exists(outfile), f"Final output file already exists at: {outfile}"
+
 #### getting the region splits for errors ####
 # if labels file already exists, read from that
 labels_file = f"{savepath}/region_labels_{nreg}reg{teststr}.txt"
@@ -142,33 +152,36 @@ if restart_run:
     assert os.path.exists(labels_file), (
         f"Region labels file {labels_file} not found. Cannot restart run without it. Set restart_run=False to generate new region labels."
     )
-if os.path.exists(labels_file) and restart_run:
-    labels = np.loadtxt(labels_file, dtype=np.int64)
-    print(f"Read region labels from {labels_file}")
+    
+if errors:
+    if os.path.exists(labels_file) and restart_run:
+        labels = np.loadtxt(labels_file, dtype=np.int64)
+        print(f"Read region labels from {labels_file}")
+    else:
+        if rank == 0:
+            km = kmeans_sample(np.vstack((cat.RA, cat.DEC)).T, nreg, maxiter=100, tol=1.0e-5)
+            labels = km.labels
+            if size > 1:
+                for i in range(1, size):
+                    comm.Send(labels, dest=i)
+                    print(f"sending labels to rank {i}")
+        elif rank > 0:
+            labels = np.empty(len(cat.RA), dtype=np.int64)
+            comm.Recv(labels, source=0)
+            print(f"received labels on rank {rank}")
+        if rank == 0:
+            np.savetxt(labels_file, labels, fmt="%d")
+            print(f"Saved region labels to {labels_file}")
+            colors = ['C'+str(i) for i in range(10)]
+            rands  = np.random.choice(np.arange(len(cat.RA)), size=1000, replace=False)
+            plt.scatter(cat.RA[rands], cat.DEC[rands], c=[colors[l%10] for l in labels[rands]], s=5)
+            plt.legend(handles=[plt.Line2D([0], [0], marker='o', color='w', label=f'Region {i}', markerfacecolor=colors[i%10], markersize=5) for i in range(nreg)],loc='best')
+            plt.savefig(f"{savepath}/region_splits.png")
+            plt.clf()
+    cat.labels = labels  # add labels to the Catalog object
+    print(np.unique(labels), "labels")
 else:
-    if rank == 0:
-        km = kmeans_sample(np.vstack((Cat.RA, Cat.DEC)).T, nreg, maxiter=100, tol=1.0e-5)
-        labels = km.labels
-        if size > 1:
-            for i in range(1, size):
-                comm.Send(labels, dest=i)
-                print(f"sending labels to rank {i}")
-    elif rank > 0:
-        labels = np.empty(len(Cat.RA), dtype=np.int64)
-        comm.Recv(labels, source=0)
-        print(f"received labels on rank {rank}")
-    if rank == 0:
-        np.savetxt(labels_file, labels, fmt="%d")
-        print(f"Saved region labels to {labels_file}")
-        colors = ['C'+str(i) for i in range(10)]
-        rands  = np.random.choice(np.arange(len(Cat.RA)), size=1000, replace=False)
-        plt.scatter(Cat.RA[rands], Cat.DEC[rands], c=[colors[l%10] for l in labels[rands]], s=5)
-        plt.legend(handles=[plt.Line2D([0], [0], marker='o', color='w', label=f'Region {i}', markerfacecolor=colors[i%10], markersize=5) for i in range(nreg)],loc='best')
-        plt.savefig(f"{savepath}/region_splits.png")
-        plt.clf()
-Cat.labels = labels  # add labels to the Catalog object
-print(np.unique(labels), "labels")
-
+    cat.labels = np.zeros(len(cat.RA), dtype=np.int64) # they are all region '0'
     
 
 # if the unit of cutout_rad is Mpc, then we need to convert it to degrees
@@ -213,6 +226,11 @@ if not os.path.exists(file_i):
         f.attrs["cutout_rad_deg"] = cutout_rad_deg.value
         f.attrs["cutout_rad_cMpc"] = cutout_rad_deg * Mpc_per_deg_comov_zmin.value
         f.attrs["cutout_rad_pMpc"] = cutout_rad_deg * Mpc_per_deg_phys_zmin.value
+        if cat.hdr is not None:
+            f.attrs["orientation_constraints"] = cat.hdr
+        elif cat.constraints is not None:
+            f.attrs["orientation_constraints"] = np.unique(cat.constraints).tolist()
+            
         for m in maps:
             mappath = maps[m]["path"]
             sn = maps[m]["shortname"]
@@ -224,7 +242,7 @@ if not os.path.exists(file_i):
                 imap = enmap.read_map(maps[m]["path"])
             for i in range(nruns_local + extras):
                 n = rank * nruns_local + i
-                in_reg = Cat.labels == n
+                in_reg = cat.labels == n
                 print(f"Rank {rank}, region {n}, Nobj = {in_reg.sum()}")
 
                 nobj_regn = 0
@@ -233,7 +251,7 @@ if not os.path.exists(file_i):
                 reg_group.attrs["Region"] = n
                 print(f"Analyzing region {n}")
                 # define the map edges for this region
-                sc = SkyCoord(ra=Cat.RA[in_reg]*u.deg, dec=Cat.DEC[in_reg]*u.deg, frame="icrs")
+                sc = SkyCoord(ra=cat.RA[in_reg]*u.deg, dec=cat.DEC[in_reg]*u.deg, frame="icrs")
                 ra_wrapped = sc.ra.wrap_at(180*u.deg)
                 lowra, highra = (
                     ra_wrapped.min() - (cutout_rad_deg+0.5*u.deg),
@@ -244,28 +262,17 @@ if not os.path.exists(file_i):
                     sc.dec.max() + (cutout_rad_deg+0.5*u.deg),
                 )
                 
-                # plot a subset of this region and save
-                # rands = np.random.choice(np.arange(len(Cat.RA[in_reg])), size=min(1000,len(Cat.RA[in_reg])), replace=False)
-                # plt.scatter(Cat.RA[in_reg][rands], Cat.DEC[in_reg][rands], s=5)
-                # plt.savefig(f"{savepath}/region_{n}_objects.png")
-                # plt.clf()
-               
-                # check for region crossing the RA = 180 deg line
-                if abs(highra - lowra) > 180*u.deg:
-                    print(f"Region {n} crosses RA=180 deg line. Adjusting bounds.")
-                    ra_wrapped[ra_wrapped < 0*u.deg] += 360*u.deg
-                    lowra, highra = (
-                        ra_wrapped.min() - (cutout_rad_deg+0.5*u.deg),
-                        ra_wrapped.max() + (cutout_rad_deg+0.5*u.deg),
-                    )
-                    
-                # lowra = lowra.wrap_at(360*u.deg).deg
-                # highra = highra.wrap_at(360*u.deg).deg
-                # lowdec = lowdec.deg
-                # highdec = highdec.deg
-                    
-                print(f"Reading chunk of map with bounds RA: [{lowra:.2f},{highra:.2f}], Dec: [{lowdec:.2f},{highdec:.2f}]")
                 if size > 1:
+                    # check for region crossing the RA = 180 deg line
+                    if abs(highra - lowra) > 180*u.deg:
+                        print(f"Region {n} crosses RA=180 deg line. Adjusting bounds.")
+                        ra_wrapped[ra_wrapped < 0*u.deg] += 360*u.deg
+                        lowra, highra = (
+                            ra_wrapped.min() - (cutout_rad_deg+0.5*u.deg),
+                            ra_wrapped.max() + (cutout_rad_deg+0.5*u.deg),
+                        )
+                        
+                    print(f"Reading chunk of map with bounds RA: [{lowra:.2f},{highra:.2f}], Dec: [{lowdec:.2f},{highdec:.2f}]")
                     imap = enmap.read_map(
                         maps[m]["path"],
                         box=[
@@ -285,16 +292,29 @@ if not os.path.exists(file_i):
                     )
                     phys_rescale_factor = Mpc_per_deg_phys_zmin / Mpc_per_deg_phys_z
                     comov_rescale_factor = Mpc_per_deg_comov_zmin / Mpc_per_deg_comov_z
-                    inz = (Cat.Z < (z + dz_rescale)) & (Cat.Z > (z - dz_rescale))
+                    inz = (cat.Z < (z + dz_rescale)) & (cat.Z > (z - dz_rescale))
                     z_rescale_str = f"z_{(z - dz_rescale):.2f}_{(z + dz_rescale):.2f}"
                     z_group = reg_group.create_group(z_rescale_str)  # create a subgroup
                     # make the ChunkObj for these z
+                    
+                    if cat.alpha is not None:
+                        alpha_inreg = cat.alpha[in_reg & inz]
+                    else:
+                        alpha_inreg = None
+                    if cat.x_asym is not None:
+                        x_asym_inreg = cat.x_asym[in_reg & inz]
+                    else:
+                        x_asym_inreg = None
+                    if cat.y_asym is not None:
+                        y_asym_inreg = cat.y_asym[in_reg & inz]
+                    else:
+                        y_asym_inreg = None
                     ChunkObj = Chunk(
-                        Cat.RA[in_reg & inz],
-                        Cat.DEC[in_reg & inz],
-                        Cat.alpha[in_reg & inz],
-                        Cat.x_asym[in_reg & inz],
-                        Cat.y_asym[in_reg & inz],
+                        cat.RA[in_reg & inz],
+                        cat.DEC[in_reg & inz],
+                        alpha_inreg,
+                        x_asym_inreg,
+                        y_asym_inreg
                     )
                     if ChunkObj.nObj == 0:
                         # set all arrays as nan
@@ -319,9 +339,9 @@ if not os.path.exists(file_i):
                     z_group.create_dataset("stack_deg", data=stack_n)
                     z_group.create_dataset("stack_phys", data=stack_n_phys)
                     z_group.create_dataset("stack_comov", data=stack_n_comov)
-                    z_group.create_dataset("RA", data=Cat.RA[in_reg & inz])
-                    z_group.create_dataset("dec", data=Cat.DEC[in_reg & inz])
-                    z_group.create_dataset("z", data=Cat.Z[in_reg & inz])
+                    z_group.create_dataset("RA", data=cat.RA[in_reg & inz])
+                    z_group.create_dataset("dec", data=cat.DEC[in_reg & inz])
+                    z_group.create_dataset("z", data=cat.Z[in_reg & inz])
                     nobj_regn += ChunkObj.nObj
                 reg_group.attrs["Nobj"] = nobj_regn
 else:
