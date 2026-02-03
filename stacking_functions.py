@@ -67,6 +67,7 @@ def stackChunk(
     thumb_shape, thumb_wcs = thumb_base.shape, thumb_base.wcs
     # get the thumbnails
     resMap = enmap.zeros(thumb_shape, thumb_wcs)  # initialize
+    
     # radian positions of each pixel
     ipos = resMap.posmap()
     X = ipos[0]
@@ -107,14 +108,27 @@ def stackChunk(
     dec = iChunk.DEC  # in deg
     # extract postage stamps around the objects. Need them to be larger than the cutout size (I think?)
     # print("before all thumbs")
-    thumbs = reproject.thumbnails(
+    
+    if orient == "original":
+        # get exact size cutouts
+        thumbs = reproject.thumbnails(
         imap,
         coords=np.deg2rad([dec, ra]).T,
         res=cutout_resolution_deg * utils.degree,
-        r=cutout_rad_deg * utils.degree + 0.5 * utils.degree,
+        r=cutout_rad_deg * utils.degree,
         method="spline",
         order=1,
-    )  # ('tan')
+    )
+    else:
+        # get slightly larger cutouts to avoid edge effects when rotating
+        thumbs = reproject.thumbnails(
+            imap,
+            coords=np.deg2rad([dec, ra]).T,
+            res=cutout_resolution_deg * utils.degree,
+            r=cutout_rad_deg * utils.degree + 0.2 * utils.degree,
+            method="spline",
+            order=1,
+        ) 
     
     # print("after all thumbs")
     # print(f"found {thumbs.shape[0]} thumbnails out of {iChunk.nObj} objects")
@@ -139,11 +153,9 @@ def stackChunk(
     x_lrg, y_lrg = X_lrg[:, 0], Y_lrg[0, :]
 
     for iObj in range(iChunk.nObj):
-        # if iObj % 1000 == 0:
-        #     print("- analyze object", iObj)
         # if ts.overlapFlag[iObj]: # Re-implement this later
 
-        # need to make sure it works for 'original' orientation too
+        
         if orient == "original":
             resMap += thumbs[iObj]
         else:
@@ -175,7 +187,7 @@ def stackChunk(
                 if iChunk.y_asym[iObj] == 1:
                     stampMap = np.flipud(stampMap)
             del X_rot, Y_rot
-        resMap += stampMap
+            resMap += stampMap
 
     resMap = resMap / iChunk.nObj
     nreturn = 1
