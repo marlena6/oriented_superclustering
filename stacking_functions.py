@@ -15,16 +15,74 @@ class Chunk:
         self.x_asym = x_asym
         self.y_asym = y_asym
 
+class StackGeometry:
+    def __init__(self, cutout_rad_deg, cutout_resolution_deg):
+        # extract sample postage stamp around 0,0.
+        thumb_shape, thumb_wcs  = enmap.thumbnail_geometry(r=cutout_rad_deg*utils.degree, res=cutout_resolution_deg*utils.degree) # this gives non-square shape
+        
+        # thumb = reproject.thumbnails(
+        #     imap=imap,   # dummy, just for geometry
+        #     coords=np.deg2rad([[0, 0]]),
+        #     res=cutout_resolution_deg * utils.degree,
+        #     r=cutout_rad_deg * utils.degree,
+        #     method="spline",
+        #     order=1,
+        # )
 
+        self.shape = thumb_shape
+        self.wcs = thumb_wcs
+        print("shape is", self.shape)
+        tmp = enmap.zeros(self.shape, self.wcs)
+        ipos = tmp.posmap()
+        X, Y = ipos
+
+        XY = np.array([X.flatten(), Y.flatten()])  
+        self.XY = XY
+        # size of canvas in radians (this is for just x direction, but cutout is symmetric)
+        self.size = ipos[0, :, :].max() - ipos[0, :, :].min()
+        self.cutout_rad_deg = cutout_rad_deg
+        self.cutout_resolution_deg = cutout_resolution_deg
+
+def extractThumbnails(
+    iChunk,
+    geom,
+    imap,
+    orient
+):
+    """Extract thumbnails for a chunk of objects from a catalog."""
+    ra = iChunk.RA  # in deg
+    dec = iChunk.DEC  # in deg
+    if orient == "original":
+        # get exact size cutouts
+        thumbs = reproject.thumbnails(
+        imap,
+        coords=np.deg2rad([dec, ra]).T,
+        res=geom.cutout_resolution_deg * utils.degree,
+        r=geom.cutout_rad_deg * utils.degree,
+        method="spline",
+        order=1,
+    )
+    else:
+         # get slightly larger cutouts to avoid edge effects when rotating
+        thumbs = reproject.thumbnails(
+            imap,
+            coords=np.deg2rad([dec, ra]).T,
+            res=geom.cutout_resolution_deg * utils.degree,
+            r=geom.cutout_rad_deg * utils.degree + 0.2 * utils.degree,
+            method="spline",
+            order=1,
+        )
+    return thumbs
+    
 def stackChunk(
     iChunk,
+    geom,
     imap,
-    cutout_rad_deg,
-    cutout_resolution_deg,
     orient,
     rescale_1=None,
     rescale_2=None,
     angledef="CofDec",
+    thumbnails=None
 ):
     """Stack a chunk of objects from a catalog onto an image, with various orientation options.
 
@@ -42,6 +100,9 @@ def stackChunk(
     Returns:
         pixell.enmap or tuple: Stacked image, optionally with rescaled versions.
     """
+    if not isinstance(iChunk, Chunk):
+        sys.exit("iChunk must be an instance of the Chunk class.")
+    
     # add a warning about arguments
     if orient not in ["original", "random", "sym", "asym_x", "asym_y", "asym_xy"]:
         sys.exit(
@@ -49,34 +110,16 @@ def stackChunk(
         )
     if rescale_2 is not None and rescale_1 is None:
         sys.exit("If rescale_2 is specified, rescale_1 must also be specified.")
-
-    # if not isinstance(iChunk, Chunk):
-    #     sys.exit("iChunk must be an instance of the Chunk class.")
-    # extract sample postage stamp around 0,0.
-    # thumb_shape, thumb_wcs  = enmap.thumbnail_geometry(r=cutout_rad_deg*utils.degree, res=cutout_resolution_deg*utils.degree) # this gives non-square shape
     
-    thumb_base = reproject.thumbnails(
-        imap,
-        coords=np.deg2rad([0, 0]).T,
-        res=cutout_resolution_deg * utils.degree,
-        r=cutout_rad_deg * utils.degree,
-        method="spline",
-        order=1,
-    )
     
-    thumb_shape, thumb_wcs = thumb_base.shape, thumb_base.wcs
+    thumb_shape, thumb_wcs = geom.shape, geom.wcs
     # get the thumbnails
     resMap = enmap.zeros(thumb_shape, thumb_wcs)  # initialize
     
     # radian positions of each pixel
-    ipos = resMap.posmap()
-    X = ipos[0]
-    Y = ipos[1]  # [:, ::-1] # flipping the order for use in scipy later
-    XY = np.array([X.flatten(), Y.flatten()])
-
-    # size of canvas in radians (this is for just x direction, but cutout is symmetric)
-    size = ipos[0, :, :].max() - ipos[0, :, :].min()
-
+    XY = geom.XY
+    size = geom.size
+    
     # size of pixel in radians
     dx = float(size) / (resMap.shape[0] - 1)
     dy = float(size) / (resMap.shape[1] - 1)
@@ -110,25 +153,31 @@ def stackChunk(
     # print("before all thumbs")
     
     if orient == "original":
-        # get exact size cutouts
-        thumbs = reproject.thumbnails(
-        imap,
-        coords=np.deg2rad([dec, ra]).T,
-        res=cutout_resolution_deg * utils.degree,
-        r=cutout_rad_deg * utils.degree,
-        method="spline",
-        order=1,
-    )
-    else:
-        # get slightly larger cutouts to avoid edge effects when rotating
-        thumbs = reproject.thumbnails(
+        if thumbnails is not None:
+            thumbs = thumbnails
+        else:
+            # get exact size cutouts
+            thumbs = reproject.thumbnails(
             imap,
             coords=np.deg2rad([dec, ra]).T,
-            res=cutout_resolution_deg * utils.degree,
-            r=cutout_rad_deg * utils.degree + 0.2 * utils.degree,
+            res=geom.cutout_resolution_deg * utils.degree,
+            r=geom.cutout_rad_deg * utils.degree,
             method="spline",
             order=1,
-        ) 
+        )
+    else:
+        if thumbnails is not None:
+            thumbs = thumbnails
+        else:
+            # get slightly larger cutouts to avoid edge effects when rotating
+            thumbs = reproject.thumbnails(
+                imap,
+                coords=np.deg2rad([dec, ra]).T,
+                res=geom.cutout_resolution_deg * utils.degree,
+                r=geom.cutout_rad_deg * utils.degree + 0.2 * utils.degree,
+                method="spline",
+                order=1,
+            ) 
     
     # print("after all thumbs")
     # print(f"found {thumbs.shape[0]} thumbnails out of {iChunk.nObj} objects")

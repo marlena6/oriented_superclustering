@@ -358,9 +358,10 @@ def retrieve_stack_info(
             wgts.append(mapdata[reg].attrs["Nobj"])
             print("Radial decompose region:", reg)
             if cap_filter:
-                r, Cr, Sr   = ss.CAP_2D_multipole(thisreg_stack, 5, f.attrs[stype])
+                r, Cr, Sr = ss.CAP_2D_multipole(thisreg_stack, 5, f.attrs[stype])
             else:
                 r, Cr, Sr = ss.radial_decompose_2D(thisreg_stack, 5, f.attrs[stype])
+            print("r", r)
             Crprofs.append(Cr)
             Srprofs.append(Sr)
     Crprofs = np.array(Crprofs).transpose(1, 0, 2)
