@@ -5,7 +5,7 @@ import astropy.units as u
 from pixell import enmap
 import catalog
 from kmeans_radec import kmeans_sample
-from stacking_functions import Chunk, stackChunk
+from stacking_functions import Chunk, stackChunk, StackGeometry, extractThumbnails
 import h5py
 from pathlib import Path
 import os
@@ -186,9 +186,16 @@ else:
 
 # if the unit of cutout_rad is Mpc, then we need to convert it to degrees
 if cutout_rad.unit == u.Mpc:
-    # based on the minimum redshift, set the max size for the cutouts
+    # find out the stack geometry based on the redshift where the cutout size is largest in angular units
+    z_array = np.linspace(zmin, zmax, int((zmax - zmin) / dz_rescale))
+    angular_size_z = cosmo.arcsec_per_kpc_comoving(z_array).to(u.arcmin / u.Mpc) * cutout_rad
+    z_largest_cutout = z_array[np.argmax(angular_size_z)]
+    print("Cutout size is largest at z =", z_largest_cutout)
+    Mpc_per_deg_comov_base = cosmo.kpc_comoving_per_arcmin(z_largest_cutout).to(u.Mpc / u.degree)
+    Mpc_per_deg_phys_base = cosmo.kpc_proper_per_arcmin(z_largest_cutout).to(u.Mpc / u.degree)
+    
     cutout_rad_deg = (
-        1 / (cosmo.kpc_comoving_per_arcmin(zmin).to(u.Mpc / u.deg)) * cutout_rad
+        1 / (cosmo.kpc_comoving_per_arcmin(z_largest_cutout).to(u.Mpc / u.deg)) * cutout_rad
     )
 elif cutout_rad.unit in [u.arcmin, u.arcsec]:
     cutout_rad_deg = cutout_rad.to(u.deg)
@@ -197,14 +204,13 @@ else:
         "cutout_rad must be in units of Mpc, degrees, arcminutes, or arcseconds"
     )
 
-cutout_resolution = (0.5 * u.arcmin).to(u.deg)
+cutout_resolution_deg = (0.5 * u.arcmin).to(u.deg)
 print(
-    f"will take thumbnails with size {cutout_rad_deg:.2f} and resolution {cutout_resolution:.2f}."
+    f"will take thumbnails with size {cutout_rad_deg:.2f} and resolution {cutout_resolution_deg:.2f}."
 )
 
-# calculate the comoving size and physical size of the lowest-redshift cutout
-Mpc_per_deg_comov_zmin = cosmo.kpc_comoving_per_arcmin(zmin).to(u.Mpc / u.degree)
-Mpc_per_deg_phys_zmin = cosmo.kpc_proper_per_arcmin(zmin).to(u.Mpc / u.degree)
+# get the stack geometry just once
+geom = StackGeometry(cutout_rad_deg.value, cutout_resolution_deg.value)
 
 ### setup multiprocessing ###
 if use_mpi:
@@ -219,13 +225,14 @@ else:
 ### end setup multiprocessing ###
 
 
+
 # Prepare to save to an HDF5 file
 file_i = f"{savepath}/stacks_{stkpts_str}_{rank}{teststr}.h5"
 if not os.path.exists(file_i):
     with h5py.File(f"{savepath}/stacks_{stkpts_str}_{rank}{teststr}.h5", "w") as f:
         f.attrs["cutout_rad_deg"] = cutout_rad_deg.value
-        f.attrs["cutout_rad_cMpc"] = cutout_rad_deg * Mpc_per_deg_comov_zmin.value
-        f.attrs["cutout_rad_pMpc"] = cutout_rad_deg * Mpc_per_deg_phys_zmin.value
+        f.attrs["cutout_rad_cMpc"] = cutout_rad_deg * Mpc_per_deg_comov_base.value
+        f.attrs["cutout_rad_pMpc"] = cutout_rad_deg * Mpc_per_deg_phys_base.value
         if cat.hdr is not None:
             f.attrs["orientation_constraints"] = cat.hdr
         elif cat.constraints is not None:
@@ -244,7 +251,6 @@ if not os.path.exists(file_i):
                 n = rank * nruns_local + i
                 in_reg = cat.labels == n
                 print(f"Rank {rank}, region {n}, Nobj = {in_reg.sum()}")
-
                 nobj_regn = 0
                 # make an HDF5 group for this region
                 reg_group = map_group.create_group(f"reg_{n}")
@@ -280,7 +286,27 @@ if not os.path.exists(file_i):
                             [np.radians(highdec.value), np.radians(highra.value)],
                         ],
                     )
-            
+                # extract all the thumbnails for this region
+                alpha_inreg = cat.alpha[in_reg] if cat.alpha is not None else None
+                x_asym_inreg = cat.x_asym[in_reg] if cat.x_asym is not None else None
+                y_asym_inreg = cat.y_asym[in_reg] if cat.y_asym is not None else None
+                ra_inreg = cat.RA[in_reg]
+                dec_inreg = cat.DEC[in_reg]
+                z_inreg = cat.Z[in_reg]
+                chunkObj_reg = Chunk(
+                        ra_inreg,
+                        dec_inreg,
+                        alpha_inreg,
+                        x_asym_inreg,
+                        y_asym_inreg
+                    )
+                thumbs = extractThumbnails(
+                    chunkObj_reg,
+                    geom,
+                    imap,
+                    orient
+                )
+                
                 for z in np.linspace(
                     zmin, zmax, int((zmax - zmin) / dz_rescale)
                 ):  # iterate through small z bins
@@ -290,59 +316,62 @@ if not os.path.exists(file_i):
                     Mpc_per_deg_comov_z = cosmo.kpc_comoving_per_arcmin(z).to(
                         u.Mpc / u.degree
                     )
-                    phys_rescale_factor = Mpc_per_deg_phys_zmin / Mpc_per_deg_phys_z
-                    comov_rescale_factor = Mpc_per_deg_comov_zmin / Mpc_per_deg_comov_z
-                    inz = (cat.Z < (z + dz_rescale)) & (cat.Z > (z - dz_rescale))
+                    phys_rescale_factor = Mpc_per_deg_phys_base / Mpc_per_deg_phys_z
+                    comov_rescale_factor = Mpc_per_deg_comov_base / Mpc_per_deg_comov_z
+                    inz = (cat.Z[in_reg] < (z + dz_rescale)) & (cat.Z[in_reg] > (z - dz_rescale))
                     z_rescale_str = f"z_{(z - dz_rescale):.2f}_{(z + dz_rescale):.2f}"
                     z_group = reg_group.create_group(z_rescale_str)  # create a subgroup
+                    
                     # make the ChunkObj for these z
                     
-                    if cat.alpha is not None:
-                        alpha_inreg = cat.alpha[in_reg & inz]
+                    if alpha_inreg is not None:
+                        alpha_inreg_inz = alpha_inreg[inz]
                     else:
-                        alpha_inreg = None
-                    if cat.x_asym is not None:
-                        x_asym_inreg = cat.x_asym[in_reg & inz]
+                        alpha_inreg_inz = None
+                    if x_asym_inreg is not None:
+                        x_asym_inreg_inz = x_asym_inreg[inz]
                     else:
-                        x_asym_inreg = None
-                    if cat.y_asym is not None:
-                        y_asym_inreg = cat.y_asym[in_reg & inz]
+                        x_asym_inreg_inz = None
+                    if y_asym_inreg is not None:
+                        y_asym_inreg_inz = y_asym_inreg[inz]
                     else:
-                        y_asym_inreg = None
-                    ChunkObj = Chunk(
-                        cat.RA[in_reg & inz],
-                        cat.DEC[in_reg & inz],
-                        alpha_inreg,
-                        x_asym_inreg,
-                        y_asym_inreg
+                        y_asym_inreg_inz = None
+                    chunkObj = Chunk(
+                        ra_inreg[inz],
+                        dec_inreg[inz],
+                        alpha_inreg_inz,
+                        x_asym_inreg_inz,
+                        y_asym_inreg_inz
                     )
-                    if ChunkObj.nObj == 0:
+                    
+                    if chunkObj.nObj == 0:
                         # set all arrays as nan
                         stack_n = [np.nan]
                         stack_n_phys = [np.nan]
                         stack_n_comov = [np.nan]
                     else:
-
+                        # get the thumbs for these z
+                        thumbs_inz = thumbs[inz]
                         # get the stack
                         print("Stacking region", n, "at z", z)
                         stack_n, stack_n_phys, stack_n_comov = stackChunk(
-                            ChunkObj,
+                            chunkObj,
+                            geom,
                             imap,
-                            cutout_rad_deg.value,
-                            cutout_resolution.value,
                             orient=orient,
                             rescale_1=phys_rescale_factor,
                             rescale_2=comov_rescale_factor,
+                            thumbnails=thumbs_inz
                         )
                     # save to this delta-z subgroup
-                    z_group.attrs["Nobj"] = ChunkObj.nObj
+                    z_group.attrs["Nobj"] = chunkObj.nObj
                     z_group.create_dataset("stack_deg", data=stack_n)
                     z_group.create_dataset("stack_phys", data=stack_n_phys)
                     z_group.create_dataset("stack_comov", data=stack_n_comov)
-                    z_group.create_dataset("RA", data=cat.RA[in_reg & inz])
-                    z_group.create_dataset("dec", data=cat.DEC[in_reg & inz])
-                    z_group.create_dataset("z", data=cat.Z[in_reg & inz])
-                    nobj_regn += ChunkObj.nObj
+                    z_group.create_dataset("RA", data=ra_inreg[inz])
+                    z_group.create_dataset("dec", data=dec_inreg[inz])
+                    z_group.create_dataset("z", data=z_inreg[inz])
+                    nobj_regn += chunkObj.nObj
                 reg_group.attrs["Nobj"] = nobj_regn
 else:
     assert restart_run, (
