@@ -50,3 +50,6 @@ class Catalog(object):
             if 'constraints' in data:
                 self.constraints = data['constraints'][rand_sel].to_numpy()
             self.hdr = header
+            
+
+    

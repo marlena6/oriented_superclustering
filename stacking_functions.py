@@ -72,6 +72,17 @@ def extractThumbnails(
             method="spline",
             order=1,
         )
+    # # check if any thumbnails contain NaNs or are all 0
+    # add an assert statement here later
+    # for it, thumb in enumerate(thumbs):
+    #     if np.any(np.isnan(np.mean(thumb, (-2, -1)))):
+    #         print(f"Thumbnail {it} at RA, dec = {iChunk.RA[it]}, {iChunk.DEC[it]} contains NaNs.")
+    #         plt.imshow(thumb)
+    #         plt.savefig(f"testing/thumb{it}.png")
+    #     elif np.all(thumb == 0):
+    #         print(f"Thumbnail {it} at RA, dec = {iChunk.RA[it]}, {iChunk.DEC[it]} is all zeros.")
+    #         plt.imshow(thumb)
+    #         plt.savefig(f"testing/thumb{it}_zeros.png")
     return thumbs
     
 def stackChunk(

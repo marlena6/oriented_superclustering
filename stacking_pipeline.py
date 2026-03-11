@@ -15,8 +15,9 @@ import glob
 import filecmp
 import matplotlib.pyplot as plt
 from astropy.coordinates import SkyCoord
+import time
 
-
+start = time.time()
 # Load config
 if len(sys.argv) != 2:
     raise ValueError("Please provide a config yaml file as an argument.")
@@ -129,8 +130,13 @@ elif rank > 0:
     
 if zmin is None:
     zmin = np.amin(cat.Z)
+    print(f"zmin not provided. Using minimum redshift in catalog: {zmin:.3f}")
 if zmax is None:
     zmax = np.amax(cat.Z)
+# make sure the redshift range is reasonable
+assert zmin < zmax, f"zmin ({zmin}) must be less than zmax ({zmax})."
+assert zmin > 0, f"zmin ({zmin}) must be greater than 0."
+assert zmax < 2, f"zmax ({zmax}) must be less than 2."
 print(f"Redshift range to stack: {zmin:.3f} - {zmax:.3f}")
 
 if len(maps) == 1:
@@ -188,6 +194,7 @@ else:
 if cutout_rad.unit == u.Mpc:
     # find out the stack geometry based on the redshift where the cutout size is largest in angular units
     z_array = np.linspace(zmin, zmax, int((zmax - zmin) / dz_rescale))
+    print(len(z_array))
     angular_size_z = cosmo.arcsec_per_kpc_comoving(z_array).to(u.arcmin / u.Mpc) * cutout_rad
     z_largest_cutout = z_array[np.argmax(angular_size_z)]
     print("Cutout size is largest at z =", z_largest_cutout)
@@ -225,11 +232,13 @@ else:
 ### end setup multiprocessing ###
 
 
+end = time.time()
+print("Whole setup took", end - start, "seconds.")
 
 # Prepare to save to an HDF5 file
 file_i = f"{savepath}/stacks_{stkpts_str}_{rank}{teststr}.h5"
 if not os.path.exists(file_i):
-    with h5py.File(f"{savepath}/stacks_{stkpts_str}_{rank}{teststr}.h5", "w") as f:
+    with h5py.File(file_i, "w") as f:
         f.attrs["cutout_rad_deg"] = cutout_rad_deg.value
         f.attrs["cutout_rad_cMpc"] = cutout_rad_deg * Mpc_per_deg_comov_base.value
         f.attrs["cutout_rad_pMpc"] = cutout_rad_deg * Mpc_per_deg_phys_base.value
@@ -243,10 +252,13 @@ if not os.path.exists(file_i):
             sn = maps[m]["shortname"]
             map_group = f.create_group(sn)
             map_group.attrs["map_path"] = mappath
-            print(f"Reading map {mappath}")
+            print(f"Handling input map: {mappath}")
             if size==1:
+                readmap_start = time.time()
                 # read the whole map
                 imap = enmap.read_map(maps[m]["path"])
+                readmap_end = time.time()
+                print(f"Read map in {readmap_end - readmap_start:.1f} seconds.")
             for i in range(nruns_local + extras):
                 n = rank * nruns_local + i
                 in_reg = cat.labels == n
@@ -282,8 +294,8 @@ if not os.path.exists(file_i):
                     imap = enmap.read_map(
                         maps[m]["path"],
                         box=[
-                            [np.radians(lowdec.value), np.radians(lowra.value)],
-                            [np.radians(highdec.value), np.radians(highra.value)],
+                            [np.radians(lowdec.value), np.radians(highra.value)],
+                            [np.radians(highdec.value), np.radians(lowra.value)],
                         ],
                     )
                 # extract all the thumbnails for this region
@@ -300,13 +312,17 @@ if not os.path.exists(file_i):
                         x_asym_inreg,
                         y_asym_inreg
                     )
+                thumbs_time = time.time()
                 thumbs = extractThumbnails(
                     chunkObj_reg,
                     geom,
                     imap,
                     orient
                 )
+                thumbs_time_end = time.time()
+                print(f"Extracted thumbnails for region {n} in {thumbs_time_end - thumbs_time:.1f} seconds.")
                 
+                stacking_start = time.time()
                 for z in np.linspace(
                     zmin, zmax, int((zmax - zmin) / dz_rescale)
                 ):  # iterate through small z bins
@@ -373,6 +389,8 @@ if not os.path.exists(file_i):
                     z_group.create_dataset("z", data=z_inreg[inz])
                     nobj_regn += chunkObj.nObj
                 reg_group.attrs["Nobj"] = nobj_regn
+                stacking_end = time.time()
+                print(f"Finished stacking region {n} in {stacking_end - stacking_start:.1f} seconds.")
 else:
     assert restart_run, (
         f"File {file_i} already exists. If you want to retry consolidating the files, set restart_run=True."
