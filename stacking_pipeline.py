@@ -25,7 +25,7 @@ config_file_path = sys.argv[1]
 print(f"Loading config from {config_file_path}")
 with open(config_file_path, "r") as f:
     cfg = yaml.safe_load(f)
-print(cfg["mpi"])
+
 use_mpi = cfg["mpi"]["use_mpi"]
 if use_mpi:
     from mpi4py import MPI
