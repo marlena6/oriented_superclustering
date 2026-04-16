@@ -236,7 +236,7 @@ def stackChunk(
                 )  # COOP version (orientations defined wrt Dec axis, but clockwise, I think)
             else:
                 sys.exit("angledef must be one of 'CCofRA' or 'CofDec'.")
-                
+            
             X_rot, Y_rot = np.dot(R, XY)
             stampMap = fun2D(X_rot, Y_rot, grid=False).reshape(resMap.shape)
             if (orient == "asym_x") or (orient == "asym_xy"):

@@ -146,15 +146,15 @@ def overdensity_to_potential(overdensity_map_alms, nside):
     return potential_alms, potential_map
 
     
-def tidal_field(alms, nside, cotth):
+def tidal_field(alms, nside, cotth, return_grads=True):
     npix = hp.nside2npix(nside)
     
     # first derivative (dphi/dtheta and dphi/sin(theta)dphi)
-    dphitheta, dphisphi = hp.alm2map_der1(alms, nside)[-2:]
+    dphitheta_map, dphisphi_map = hp.alm2map_der1(alms, nside)[-2:]
 
     # turn into alms again (no direct function maybe because numerical)
-    dphitheta = hp.sphtfunc.map2alm(dphitheta, pol=False)
-    dphisphi = hp.sphtfunc.map2alm(dphisphi, pol=False)
+    dphitheta = hp.sphtfunc.map2alm(dphitheta_map, pol=False)
+    dphisphi = hp.sphtfunc.map2alm(dphisphi_map, pol=False)
 
     # t11 is derivative with respect to theta twice (dphithetatheta)
     t11, dphisphitheta = hp.alm2map_der1(dphitheta, nside)[-2:]
@@ -166,7 +166,9 @@ def tidal_field(alms, nside, cotth):
     # t22 is a mixture of stuff
     dphitheta = hp.sphtfunc.alm2map(dphitheta, nside)
     t22 = cotth*dphitheta + dphisphisphi
-    del dphisphitheta, dphisphisphi, dphitheta, dphisphi, cotth
+    if not return_grads:
+        del dphisphitheta, dphisphisphi, dphitheta, dphisphi, cotth
+    else: del dphisphitheta, dphisphisphi, cotth
     gc.collect()
     
     # to be used as a sanity check
@@ -180,10 +182,12 @@ def tidal_field(alms, nside, cotth):
     tidal[:, 1, 1] = t22
     del t11, t12, t21, t22
     gc.collect()
-    
-    return tidal
+    if return_grads:
+        return tidal, dphitheta_map, dphisphi_map
+    else:
+        return tidal
 
-def measure_orientation(ra, dec, z, overdensity_map, cotth, e_min=None, e_max=None, nu_min=None, mode='density'):
+def measure_orientation(ra, dec, overdensity_map, cotth, e_min=None, e_max=None, nu_min=None, mode='density', return_xy_pol=True):
     # standard check: ensure zero mean
     assert np.abs(np.mean(overdensity_map)) < 1e-3, "The input map does not have zero mean."
     
@@ -194,7 +198,10 @@ def measure_orientation(ra, dec, z, overdensity_map, cotth, e_min=None, e_max=No
         alms, inmap = overdensity_to_potential(alms, nside)
     else:
         inmap = overdensity_map
-    tidal = tidal_field(alms, nside, cotth) # pix, 2, 2
+    if return_xy_pol:
+        tidal, dphitheta, dphisphi = tidal_field(alms, nside, cotth)
+    else:
+        tidal = tidal_field(alms, nside, cotth) # tidal is shape pix, 2, 2
     ### selections ###
     # find pixel indices for each object
     
@@ -217,6 +224,9 @@ def measure_orientation(ra, dec, z, overdensity_map, cotth, e_min=None, e_max=No
             ecut_max = e < e_max
         else:
             ecut_max = np.ones(len(e), dtype=bool)
+    if e_min is None and e_max is None:
+        ecut_min = np.ones(len(evals), dtype=bool)
+        ecut_max = np.ones(len(evals), dtype=bool)
     if nu_min is not None:
         # compute nu: delta/sigma
         sigma = np.std(inmap)
@@ -225,38 +235,54 @@ def measure_orientation(ra, dec, z, overdensity_map, cotth, e_min=None, e_max=No
         nucut_min = nu_obj > nu_min
     else:
         nucut_min = np.ones(len(evals), dtype=bool)
-    print(ecut_min.shape, ecut_max.shape, nucut_min.shape)
     # combine the boolean cuts
     final_cut = ecut_min & ecut_max & nucut_min
-    ra_cut = ra[final_cut]
-    dec_cut = dec[final_cut]
-    z_cut = z[final_cut]
     
     ### selections ###
     
     ### orientation ###
 
-    evals = evals[..., i_sort][final_cut]
-    evecs = evecs[final_cut]
-    print(evals.shape, evecs.shape)
-    evals_sorted = np.zeros_like(evals)
-    evecs_sorted = np.zeros_like(evecs)
-    for i in range(evals.shape[0]):
-        evecs_sorted[i, :, 0] = evecs[i, :, i_sort[i, 0]]
-        evecs_sorted[i, :, 1] = evecs[i, :, i_sort[i, 1]]        
-    del i_sort
+    evals_sorted = np.zeros((np.sum(final_cut), 2))
+    evecs_sorted = np.zeros((np.sum(final_cut), 2, 2))
+    evals_sel = evals[final_cut]
+    evecs_sel = evecs[final_cut]
+    i_sort_sel = i_sort[final_cut]
+    for i in range(evals_sel.shape[0]):
+        evecs_sorted[i, :, 0] = evecs_sel[i, :, i_sort_sel[i, 0]]
+        evecs_sorted[i, :, 1] = evecs_sel[i, :, i_sort_sel[i, 1]]
+        evals_sorted[i, 0] = evals_sel[i, i_sort_sel[i, 0]]
+        evals_sorted[i, 1] = evals_sel[i, i_sort_sel[i, 1]]
+    del i_sort, i_sort_sel
     gc.collect()
-    del evals, evecs
+    del evals, evecs, evals_sel, evecs_sel
     gc.collect()
     evals, evecs = evals_sorted, evecs_sorted
     e_th = np.array([1., 0.]) # A e_theta unit vector
     ca = np.zeros(evals.shape[0])
     sa = np.zeros(evals.shape[0])
     alpha = np.zeros(evals.shape[0])
+    if return_xy_pol:
+        x_pol = np.ones(evals.shape[0])
+        y_pol = np.ones(evals.shape[0])
+        
     for i in range(evals.shape[0]):
-        e2 = evecs[i, :, 0] # B smallest eigenvector
+        print(evals[i])
+        e2 = evecs[i, :, 1] # B smallest eigenvector
         # assert np.isclose(np.linalg.norm(e2), 1.)
         ca[i] = np.dot(e_th, e2)
         sa[i] = np.cross(e_th, e2) # applying ca, -sa, sa, ca to A gives 1 in the dot product with B for any A, B
         alpha[i] = np.arctan2(sa[i], ca[i])
-    return ra_cut, dec_cut, z_cut, ca, sa, alpha
+        if return_xy_pol:
+            # measure the gradient along the e2 direction and make sure it's positive (i.e. e2 points "uphill")
+            grad_e2 = e2[0]*dphitheta[pix[final_cut][i]] + e2[1]*dphisphi[pix[final_cut][i]]
+            if grad_e2<0:
+                x_pol[i] = -1
+            e1 = evecs[i, :, 1]
+            grad_e1 = e1[0]*dphitheta[pix[final_cut][i]] + e1[1]*dphisphi[pix[final_cut][i]]
+            if grad_e1<0:
+                y_pol[i] = -1
+    
+    if return_xy_pol:
+        return alpha, x_pol, y_pol, ca, sa, final_cut
+    else:
+        return alpha, ca, sa, final_cut
