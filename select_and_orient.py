@@ -94,15 +94,18 @@ def delta_g(nside, ra, dec, ra_rand=None, dec_rand=None, catalog_weights=None, r
         
         threshold= 0.2 * np.mean(smoothed_rand_map)
         # print("Min of randoms within threhsold is", np.min(smoothed_rand_map[smoothed_rand_map>threshold]))
-        is_observed = abs(smoothed_rand_map) > threshold
+        if mask is None:
+            mask = abs(smoothed_rand_map) > threshold
         # print("Mean smoothed diff", np.mean(smoothed_diff_map[is_observed]), "Mean smoothed rand", np.mean(smoothed_rand_map[is_observed]), "Mean smoothed data", np.mean(smoothed_data_map[is_observed]), "ratio data to rand with alpha", np.mean(smoothed_data_map[is_observed])/(alpha*np.mean(smoothed_rand_map[is_observed])))
-        delta_map[is_observed] = smoothed_diff_map[is_observed] / smoothed_rand_map[is_observed]
+        delta_map[mask] = smoothed_diff_map[mask] / smoothed_rand_map[mask]
         # define the mask as wherever the randoms counts are below the threshold
         # print("Mean data:", np.mean(data_map[is_observed]))
         # print("Mean rand:", np.mean(rand_map[is_observed]))
         # print("Mean of delta map is", np.mean(delta_map[is_observed]))
         hp.mollview(delta_map, max=0.5, min=-0.5)
-        return delta_map
+        
+        return delta_map, mask
+        
 
 def DecRatoThetaPhi(dec,ra):
     theta = np.deg2rad(-dec+90.)

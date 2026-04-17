@@ -213,9 +213,9 @@ for i in range(len(zlist_tot)):
     z_mid = (oo_zlow + oo_zhi)/2.
     smth_arcmin = (cosmo.arcsec_per_kpc_comoving(z_mid) * (smth*u.Mpc)).to(u.arcmin).value
     if randoms_catalog is not None:
-        odmap = sao.delta_g(nside, ra_oo_bin, dec_oo_bin, ra_rand=ra_rand_bin, dec_rand=dec_rand_bin, catalog_weights=w_oo_bin, randoms_weights=w_rand_bin, smth=smth_arcmin)
+        odmap, mask = sao.delta_g(nside, ra_oo_bin, dec_oo_bin, ra_rand=ra_rand_bin, dec_rand=dec_rand_bin, catalog_weights=w_oo_bin, randoms_weights=w_rand_bin, smth=smth_arcmin)
     elif mask is not None:
-        odmap = sao.delta_g(nside, ra_oo_bin, dec_oo_bin, catalog_weights=w_oo_bin, mask=mask, smth=smth_arcmin)
+        odmap, mask = sao.delta_g(nside, ra_oo_bin, dec_oo_bin, catalog_weights=w_oo_bin, mask=mask, smth=smth_arcmin)
     
     
     # save the map
@@ -232,7 +232,7 @@ for i in range(len(zlist_tot)):
     else:
         return_xy_pol = False
     
-    alpha, x_pol, y_pol, ca, sa, final_cut = sao.measure_orientation(ra_so_bin, dec_so_bin, odmap, cotth, e_min=e_min, e_max=e_max, nu_min=nu_min, mode='density', return_xy_pol=return_xy_pol)
+    alpha, x_pol, y_pol, ca, sa, final_cut = sao.measure_orientation(ra_so_bin, dec_so_bin, odmap, cotth, e_min=e_min, e_max=e_max, nu_min=nu_min, mode='density', return_xy_pol=return_xy_pol, mask=mask)
     
     alpha_all.extend(alpha)
     xpol_all.extend(x_pol)
