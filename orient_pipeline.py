@@ -7,6 +7,8 @@ import healpy as hp
 import sys
 import select_and_orient as sao
 import yaml
+import pandas as pd
+import shutil
 h = (cosmo.H0/100.).value
 
 ##################################
@@ -25,6 +27,7 @@ filenames_in_Mpc = cfg["run"]["filenames_in_Mpc"] # if True, the filenames will 
 stack_catalog = cfg["files"]["stacking_object_catalog"]
 orient_catalog  = cfg["files"]["orient_object_catalog"]
 randoms_catalog = cfg["files"]["randoms_catalog"]
+mask = cfg["files"]["mask"] # if not None, should be a binary mask: fits file with 1s in the area to use and 0s in the area to mask out
 
 nu_min = cfg["analysis"]["nu_min"]
 nu_max = cfg["analysis"]["nu_max"]
@@ -40,10 +43,12 @@ orient_mode = cfg["analysis"]["orientation_mode"] # "original", "random", "sym",
 center_objects_label = cfg["analysis"]["center_objects_label"] # e.g., 'lrgc_dr1' for 'clustering' LRGs
 orient_objects_label = cfg["analysis"]["orient_objects_label"] # e.g., 'elgc+lrgc_dr1' for 'clustering' LRGs + ELGs
 nside = cfg["analysis"]["healpix_nside"]
-
 use_mpi = cfg["mpi"]["use_mpi"]
-
+minz = cfg["analysis"]["z_min"]
+maxz = cfg["analysis"]["z_max"]
 ##################################
+
+
 
 if use_mpi:
     from mpi4py import MPI
@@ -62,12 +67,32 @@ so_width = 5
 # and for orientation object bins
 oo_width = 20
 pct = frac_use*100
-
-# have rank 0 make the new directory, all others wait
+if frac_use != 1:
+    pctstr = "_{:.0f}pct".format(pct)
+else:
+    pctstr = ""
+if nu_min is not None or nu_max is not None or e_min is not None or e_max is not None:
+    cutstr = '_cuts'
+else:
+    cutstr = ''
+zstr = "{:.2f}_{:.2f}".format(minz, maxz).replace('.','pt')
+# savename for file
+save_file = os.path.join(save_path, f"{orient_objects_label}{pctstr}_{zstr}_{smth_str}Mpc{cutstr}_{orient_mode}.csv")
+if os.path.exists(save_file):
+    raise ValueError(f"Output file {save_file} already exists. Please change the save_path or delete the existing file to avoid overwriting.")
+else:
+    print("Will save output to", save_file)
+    
+# have rank 0 make the new directory and copy over config file, all others wait
 if rank == 0:
     if not os.path.exists(save_path):
         os.mkdir(save_path)
         print(f"Created directory {save_path} for this run.")
+    
+    # copy the config file into the output directory, if not already there
+    if not os.path.exists(os.path.join(save_path, os.path.basename(config_file_path))):
+        shutil.copy(config_file_path, os.path.join(save_path, os.path.basename(config_file_path)))
+
 if use_mpi and size > 1:
     comm.Barrier()  # wait for rank 0 to finish making the directory
 
@@ -83,8 +108,8 @@ elif los_split_mode == 'custom_dlist':
     dlist_tot, zlist_tot = sao.dlist(cosmo, dlist=dbins)
     
 elif los_split_mode == 'auto_overlap':
-    minz = cfg["analysis"]["z_min"]+.005 # add small buffer
-    maxz = cfg["analysis"]["z_max"]-.005 # add small buffer
+    minz = minz+.005 # add small buffer
+    maxz = maxz-.005 # add small buffer
     comoving_oo_narrowbin_start  = cosmo.comoving_distance(minz).to(u.Mpc)
     comoving_oo_narrowbin_0 = np.array([comoving_oo_narrowbin_start.value, (comoving_oo_narrowbin_start+oo_width*u.Mpc).value])
     nbins = int((cosmo.comoving_distance(maxz).to(u.Mpc).value - comoving_oo_narrowbin_start.value)/so_width)
@@ -95,7 +120,7 @@ elif los_split_mode == 'auto_overlap':
 # save the zlist to a file
 np.savetxt(os.path.join(save_path, "zlist.txt"), zlist_tot)
 
-nside = 1024
+nside = 512
 npix  = hp.nside2npix(nside)
 th, ph = hp.pixelfunc.pix2ang(nside, np.arange(npix))
 cotth = np.cos(th)/np.sin(th)
@@ -105,15 +130,22 @@ ra_so,dec_so,z_so,w_so = sao.get_radecz(stack_catalog, return_weight=True)
 if orient_catalog is not None:
     ra_oo, dec_oo, z_oo, w_oo = sao.get_radecz(orient_catalog, return_weight=True)
 
-# load the randoms data
-ra_rand, dec_rand, z_rand, w_rand = sao.get_radecz(randoms_catalog, return_weight=True)
+if randoms_catalog is not None:
+    # load the randoms data
+    ra_rand, dec_rand, z_rand, w_rand = sao.get_radecz(randoms_catalog, return_weight=True)
 
-peakspath = save_path + "orient_by_{:s}_{:d}".format(orient_objects_label, pct)
-
-orient_path = os.path.join(peakspath, "orientations")
-if not os.path.exists(orient_path):
-    os.mkdir(orient_path)
     
+alpha_all = []
+xpol_all = []
+ypol_all = []
+ca_all = []
+sa_all = []
+ra_all = []
+dec_all = []
+z_all = []
+
+total_time = 0
+
 for i in range(len(zlist_tot)):
     
     start = time.time()
@@ -172,22 +204,48 @@ for i in range(len(zlist_tot)):
         ra_oo_bin = ra_so[in_oo_bin]
         dec_oo_bin = dec_so[in_oo_bin]
 
-    in_rand_bin = (z_rand<oo_zhi) & (z_rand>oo_zlow)
-    w_rand_bin = w_rand[in_rand_bin]
-    ra_rand_bin = ra_rand[in_rand_bin]
-    dec_rand_bin = dec_rand[in_rand_bin]
+    if randoms_catalog is not None:
+        in_rand_bin = (z_rand<oo_zhi) & (z_rand>oo_zlow)
+        w_rand_bin = w_rand[in_rand_bin]
+        ra_rand_bin = ra_rand[in_rand_bin]
+        dec_rand_bin = dec_rand[in_rand_bin]
+        
+    z_mid = (oo_zlow + oo_zhi)/2.
+    smth_arcmin = (cosmo.arcsec_per_kpc_comoving(z_mid) * (smth*u.Mpc)).to(u.arcmin).value
+    if randoms_catalog is not None:
+        odmap = sao.delta_g(nside, ra_oo_bin, dec_oo_bin, ra_rand=ra_rand_bin, dec_rand=dec_rand_bin, catalog_weights=w_oo_bin, randoms_weights=w_rand_bin, smth=smth_arcmin)
+    elif mask is not None:
+        odmap = sao.delta_g(nside, ra_oo_bin, dec_oo_bin, catalog_weights=w_oo_bin, mask=mask, smth=smth_arcmin)
     
-    
-    odmap = sao.delta_g(nside, ra_oo_bin, dec_oo_bin, ra_rand=ra_rand_bin, dec_rand=dec_rand_bin, catalog_weights=w_oo_bin, randoms_weights=w_rand_bin, smth=smth)
     
     # save the map
     if write_maps:
-        pkmap = os.path.join(save_path, "odmap_{:s}_{:d}_{:s}.fits".format(orient_mode, pct, binstr_orient))
+        if not os.path.exists(os.path.join(save_path, "maps")):
+            os.mkdir(os.path.join(save_path, "maps"))
+        
+        pkmap = os.path.join(save_path, "maps", "odmap_{:s}_{:d}_{:s}.fits".format(orient_mode, pct, binstr_orient))
         hp.write_map(pkmap, odmap, overwrite=True, dtype=np.float32)
     
     start = time.time()
-    ra_cut, dec_cut, z_cut, ca, sa = sao.measure_orientation(ra_so_bin, dec_so_bin, z_so_bin, pkmap, cotth, e_min=e_min, e_max=e_max, nu_min=nu_min, mode='density')
+    if orient_mode in ['asym_xy', 'asym_x', 'asym_y']:
+        return_xy_pol = True
+    else:
+        return_xy_pol = False
     
+    alpha, x_pol, y_pol, ca, sa, final_cut = sao.measure_orientation(ra_so_bin, dec_so_bin, odmap, cotth, e_min=e_min, e_max=e_max, nu_min=nu_min, mode='density', return_xy_pol=return_xy_pol)
+    
+    alpha_all.extend(alpha)
+    xpol_all.extend(x_pol)
+    ypol_all.extend(y_pol)
+    ca_all.extend(ca)
+    sa_all.extend(sa)
+    ra_all.extend(ra_so_bin[final_cut])
+    dec_all.extend(dec_so_bin[final_cut])
+    z_all.extend(z_so_bin[final_cut])
     end = time.time()
-    print("Time elapsed for this bin: {:.2f} seconds".format(end-start))
-    
+    print(f"Time elapsed for bin {i} out of {len(zlist_tot)}: {end-start:.2f} seconds.")
+    total_time += end-start
+print("Total time was", total_time, "seconds, or {:.2f} minutes.".format(total_time/60.))
+
+df = pd.DataFrame({'RA':ra_all, 'DEC':dec_all, 'Z':z_all, 'alpha':alpha_all, 'x_asym':xpol_all, 'y_asym':ypol_all, 'config':os.path.basename(config_file_path).replace('.yaml','')})
+df.to_csv(save_file, index=False)

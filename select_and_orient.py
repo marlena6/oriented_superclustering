@@ -37,29 +37,19 @@ def get_radecz(filepath, return_id=False, return_weight=False):
         to_return.append(w)
     return to_return
 
-def delta_g(nside, ra, dec, ra_rand=None, dec_rand=None, catalog_weights=None, randoms_weights=None, alpha=1, smth=0, beam='gaussian'): # smoothing scale in arcsec
+def delta_g(nside, ra, dec, ra_rand=None, dec_rand=None, catalog_weights=None, randoms_weights=None, mask=None, smth=60): # smoothing scale in arcsec
     '''
     Get a number density map from a set of coordinates and weights
     Parameters:
     nside: int
         Healpix nside parameter
-    theta: float array
-        Declination in radians
-    phi: float array
-        Right ascension in radians
-    binmask: float array
-        Array of values to mask the map with (must be binary)
-    fracmask: float array
-        Array of values to correct the map for survey incompleteness
-    smth: float
-        Smoothing scale in arcminutes
-    wgt: float array
-        Array of weights for each coordinate
-    beam: string
-        Beam type for smoothing. Options are 'gaussian' or 'tophat'
+    
     Returns:
     map: float array
         Number density map (smoothed or unsmoothed)
+        
+    smth: float
+        Smoothing scale in arcminutes. If 0, no smoothing is applied.
     '''
     import healpy as hp
     threshold=1e-5
@@ -71,32 +61,48 @@ def delta_g(nside, ra, dec, ra_rand=None, dec_rand=None, catalog_weights=None, r
     data_map   = np.zeros((hp.nside2npix(nside)))
     pix = hp.ang2pix(nside, ra, dec, lonlat=True)
     np.add.at(data_map, pix, catalog_weights)
-    rand_map = np.zeros((hp.nside2npix(nside)))
-    rand_pix = hp.ang2pix(nside, ra_rand, dec_rand, lonlat=True)
-    np.add.at(rand_map, rand_pix, randoms_weights)
-    print("sum data", np.sum(data_map), "sum rand", np.sum(rand_map))
+    if ra_rand is None or dec_rand is None:
+        print("No randoms provided, returning data map only.")
+        if mask is not None:
+            # make sure msk is binary
+            assert np.all((mask==0) | (mask==1)), "Mask should be binary (0 or 1)."
+            npix = np.sum(mask)
+        else:
+            npix = data_map.size
+        mean = np.sum(data_map)/npix
+        data_map = data_map / mean - 1.
+        if smth>0:
+            data_map = hp.sphtfunc.smoothing(data_map, fwhm = np.deg2rad(smth/60.), pol=False)
+        if mask is not None:
+            data_map *= mask
+        return data_map
+    else:
+        rand_map = np.zeros((hp.nside2npix(nside)))
+        rand_pix = hp.ang2pix(nside, ra_rand, dec_rand, lonlat=True)
+        np.add.at(rand_map, rand_pix, randoms_weights)
+        # print("sum data", np.sum(data_map), "sum rand", np.sum(rand_map))
 
-    hp.mollview(rand_map, max=.005)
-    hp.mollview(data_map, max=.005)
-    alpha = np.sum(catalog_weights)/np.sum(randoms_weights)
-    print("alpha is", alpha)
+        hp.mollview(rand_map, max=.005)
+        hp.mollview(data_map, max=.005)
+        alpha = np.sum(catalog_weights)/np.sum(randoms_weights)
+        # print("alpha is", alpha)
 
-    delta_map = np.zeros(data_map.size)
-    smoothed_data_map = hp.sphtfunc.smoothing(data_map, fwhm = np.deg2rad(smth/60.), pol=False)
-    smoothed_rand_map = hp.sphtfunc.smoothing(rand_map, fwhm = np.deg2rad(smth/60.), pol=False)
-    smoothed_diff_map = smoothed_data_map - alpha * smoothed_rand_map
-    
-    threshold= 0.2 * np.mean(smoothed_rand_map)
-    print("Min of randoms within threhsold is", np.min(smoothed_rand_map[smoothed_rand_map>threshold]))
-    is_observed = abs(smoothed_rand_map) > threshold
-    print("Mean smoothed diff", np.mean(smoothed_diff_map[is_observed]), "Mean smoothed rand", np.mean(smoothed_rand_map[is_observed]), "Mean smoothed data", np.mean(smoothed_data_map[is_observed]), "ratio data to rand with alpha", np.mean(smoothed_data_map[is_observed])/(alpha*np.mean(smoothed_rand_map[is_observed])))
-    delta_map[is_observed] = smoothed_diff_map[is_observed] / smoothed_rand_map[is_observed]
-    # define the mask as wherever the randoms counts are below the threshold
-    print("Mean data:", np.mean(data_map[is_observed]))
-    print("Mean rand:", np.mean(rand_map[is_observed]))
-    print("Mean of delta map is", np.mean(delta_map[is_observed]))
-    hp.mollview(delta_map, max=0.5, min=-0.5)
-    return delta_map
+        delta_map = np.zeros(data_map.size)
+        smoothed_data_map = hp.sphtfunc.smoothing(data_map, fwhm = np.deg2rad(smth/60.), pol=False)
+        smoothed_rand_map = hp.sphtfunc.smoothing(rand_map, fwhm = np.deg2rad(smth/60.), pol=False)
+        smoothed_diff_map = smoothed_data_map - alpha * smoothed_rand_map
+        
+        threshold= 0.2 * np.mean(smoothed_rand_map)
+        # print("Min of randoms within threhsold is", np.min(smoothed_rand_map[smoothed_rand_map>threshold]))
+        is_observed = abs(smoothed_rand_map) > threshold
+        # print("Mean smoothed diff", np.mean(smoothed_diff_map[is_observed]), "Mean smoothed rand", np.mean(smoothed_rand_map[is_observed]), "Mean smoothed data", np.mean(smoothed_data_map[is_observed]), "ratio data to rand with alpha", np.mean(smoothed_data_map[is_observed])/(alpha*np.mean(smoothed_rand_map[is_observed])))
+        delta_map[is_observed] = smoothed_diff_map[is_observed] / smoothed_rand_map[is_observed]
+        # define the mask as wherever the randoms counts are below the threshold
+        # print("Mean data:", np.mean(data_map[is_observed]))
+        # print("Mean rand:", np.mean(rand_map[is_observed]))
+        # print("Mean of delta map is", np.mean(delta_map[is_observed]))
+        hp.mollview(delta_map, max=0.5, min=-0.5)
+        return delta_map
 
 def DecRatoThetaPhi(dec,ra):
     theta = np.deg2rad(-dec+90.)
@@ -187,7 +193,7 @@ def tidal_field(alms, nside, cotth, return_grads=True):
     else:
         return tidal
 
-def measure_orientation(ra, dec, overdensity_map, cotth, e_min=None, e_max=None, nu_min=None, mode='density', return_xy_pol=True):
+def measure_orientation(ra, dec, overdensity_map, cotth, e_min=None, e_max=None, nu_min=None, mode='density', return_xy_pol=True, mask=None):
     # standard check: ensure zero mean
     assert np.abs(np.mean(overdensity_map)) < 1e-3, "The input map does not have zero mean."
     
@@ -210,7 +216,6 @@ def measure_orientation(ra, dec, overdensity_map, cotth, e_min=None, e_max=None,
     evals, evecs = np.linalg.eig(tidal_obj) # nobj, 2 (evals), nobj, 2, 2 (evecs)
     evals *= -1 # reverse sign so that peaks are positive. Note: different than Boryana's implementation
     i_sort = np.argsort(evals, axis=1) # same shape as evals
-    print(evals[i_sort].shape)
     if e_min is not None or e_max is not None:
         # compute ellipticity for the objects: lambda1-lambda2/2(lambda1+lambda2)
         eigs_larger = np.take_along_axis(evals,i_sort, axis=1)[:,1]
@@ -229,7 +234,10 @@ def measure_orientation(ra, dec, overdensity_map, cotth, e_min=None, e_max=None,
         ecut_max = np.ones(len(evals), dtype=bool)
     if nu_min is not None:
         # compute nu: delta/sigma
-        sigma = np.std(inmap)
+        if mask is None:
+            sigma = np.std(inmap)
+        else:
+            sigma = np.std(inmap[mask>0])
         print("Computed rms of the field: {:.4f}".format(sigma))
         nu_obj = inmap[pix]/sigma
         nucut_min = nu_obj > nu_min
@@ -261,12 +269,11 @@ def measure_orientation(ra, dec, overdensity_map, cotth, e_min=None, e_max=None,
     ca = np.zeros(evals.shape[0])
     sa = np.zeros(evals.shape[0])
     alpha = np.zeros(evals.shape[0])
-    if return_xy_pol:
-        x_pol = np.ones(evals.shape[0])
-        y_pol = np.ones(evals.shape[0])
-        
+    
+    x_pol = np.ones(evals.shape[0])
+    y_pol = np.ones(evals.shape[0])
+    
     for i in range(evals.shape[0]):
-        print(evals[i])
         e2 = evecs[i, :, 1] # B smallest eigenvector
         # assert np.isclose(np.linalg.norm(e2), 1.)
         ca[i] = np.dot(e_th, e2)
@@ -282,7 +289,4 @@ def measure_orientation(ra, dec, overdensity_map, cotth, e_min=None, e_max=None,
             if grad_e1<0:
                 y_pol[i] = -1
     
-    if return_xy_pol:
-        return alpha, x_pol, y_pol, ca, sa, final_cut
-    else:
-        return alpha, ca, sa, final_cut
+    return alpha, x_pol, y_pol, ca, sa, final_cut
