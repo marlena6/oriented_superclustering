@@ -25,7 +25,7 @@ config_file_path = sys.argv[1]
 print(f"Loading config from {config_file_path}")
 with open(config_file_path, "r") as f:
     cfg = yaml.safe_load(f)
-print(cfg["mpi"])
+
 use_mpi = cfg["mpi"]["use_mpi"]
 if use_mpi:
     from mpi4py import MPI
@@ -56,7 +56,6 @@ else:
     nreg = 1
     assert size == 1, "MPI size must be 1 when errors are disabled."
 
-constraint_str = cfg["catalog"]["constraint_str"]
 orient = cfg["analysis"]["orient"]
 cutout_rad = cfg["analysis"]["cutout_rad_mpc"] * u.Mpc
 dz_rescale = cfg["analysis"]["dz_rescale"]
@@ -68,8 +67,7 @@ if zmin in ["None","none",None, ""]:
 if zmax in ["None","none",None, ""]:
     zmax = None
 basepath = cfg["paths"]["basepath"]
-stack_pts_path = cfg["paths"]["stack_pts_path"]
-stack_pts_file = f"{constraint_str}" if f"{constraint_str}".endswith(".csv") else f"{constraint_str}.csv"
+orientfile = cfg["paths"]["orient_file"]
 savepath = os.path.join(basepath, newdir_name)
 
 # have rank 0 make the new directory, all others wait
@@ -86,19 +84,17 @@ if use_mpi and size > 1:
     comm.Barrier()  # wait for rank 0 to finish making the directory
 
 maps = cfg["maps"]
-stkpts_str = Path(stack_pts_file).stem
 
 
 # add some function here to check if each map is an enmap, and convert from healpix to enmap otherwise
 
 # read the orientation information
 
-orientfile = stack_pts_path + stack_pts_file
 
 if rank == 0:
     # if not already there, save a copy of the orient file in the new directory for bookkeeping
-    if not os.path.exists(savepath + stack_pts_file):
-        shutil.copy(orientfile, savepath + stack_pts_file)
+    if not os.path.exists(savepath + os.path.basename(orientfile)):
+        shutil.copy(orientfile, savepath + os.path.basename(orientfile))
     # if no yaml file is in the new directory yet, save a copy of the config file for bookkeeping
     yamls = glob.glob(savepath + "/*.yaml")
     assert len(yamls) <= 1, (
@@ -109,14 +105,13 @@ if rank == 0:
             f"YAML file {yamls[0]} does not match the config file used for this run: {config_file_path}. Delete the old yaml file or set a different newdir_name."
         )
     if yamls == []:
-        shutil.copy(config_file_path, savepath + "/config_used.yaml")
+        shutil.copy(config_file_path, savepath + "/stacking_config_used.yaml")
 
 if rank==0:
     # read the catalog
     cat = catalog.Catalog(
         name="standard",
-        nameLong=constraint_str,
-        pathInCatalog=stack_pts_path + stack_pts_file,
+        pathInCatalog=orientfile,
         nObj=nObj,
     )
     print("Analyzing catalog of length", len(cat.Z))
@@ -141,10 +136,10 @@ print(f"Redshift range to stack: {zmin:.3f} - {zmax:.3f}")
 
 if len(maps) == 1:
     outfile = (
-        f"{savepath}/{maps['map1']['shortname']}_consol_stacks_z{zmin:.2f}_{zmax:.2f}_{stkpts_str}{teststr}.h5"
+        f"{savepath}/{maps['map1']['shortname']}_consol_stacks_z{zmin:.2f}_{zmax:.2f}_{Path(orientfile).stem}{teststr}.h5"
     )
 else:
-    print("Not yet implemented.")
+    raise NotImplementedError("Currently only supports one map. Please add functionality to handle multiple maps if needed.")
 
 # Make sure the output file doesn't already exist
 if rank == 0:
@@ -236,7 +231,7 @@ end = time.time()
 print("Whole setup took", end - start, "seconds.")
 
 # Prepare to save to an HDF5 file
-file_i = f"{savepath}/stacks_{stkpts_str}_{rank}{teststr}.h5"
+file_i = f"{savepath}/stacks_{Path(orientfile).stem}_{rank}{teststr}.h5"
 if not os.path.exists(file_i):
     with h5py.File(file_i, "w") as f:
         f.attrs["cutout_rad_deg"] = cutout_rad_deg.value
@@ -404,7 +399,7 @@ if use_mpi and size > 1:
         print("Consolidating stacks to", outfile)
 
         with h5py.File(outfile, "w") as consol_f:
-            files = glob.glob(f"{savepath}/stacks_{stkpts_str}*{teststr}.h5")
+            files = glob.glob(f"{savepath}/stacks_{Path(orientfile).stem}*{teststr}.h5")
             for m in maps:
                 mappath = maps[m]["path"]
                 sn = maps[m]["shortname"]
@@ -431,5 +426,5 @@ if use_mpi and size > 1:
                 os.remove(file)
         print(f"Saved to {outfile}")
 else:
-    os.rename(f"{savepath}/stacks_{stkpts_str}_{rank}{teststr}.h5", outfile)
+    os.rename(f"{savepath}/stacks_{Path(orientfile).stem}_{rank}{teststr}.h5", outfile)
     print(f"Saved to {outfile}")

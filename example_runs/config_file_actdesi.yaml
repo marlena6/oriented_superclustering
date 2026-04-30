@@ -9,7 +9,7 @@ mpi:
 # ===============================
 run:
   restart_run: false
-  newdir_name: "actdesi_lrgs_p7_p75_jan27/"
+  newdir_name: "stacks_apr17/"
   test: false
   nObj_test: 1000   # only used if test=true
 
@@ -18,13 +18,7 @@ run:
 # ===============================
 errors:
   enabled: true
-  nreg: 3   # number of regions if enabled
-
-# ===============================
-# Input catalog constraints
-# ===============================
-catalog:
-  constraint_str: "lrgc_nocut_lrgc_nu10gt2_e10gtpt3_o10_100pct_0.7_1.0"
+  nreg: 4   # number of regions if enabled
 
 # ===============================
 # Stacking / analysis options
@@ -33,15 +27,16 @@ analysis:
   orient: "asym_xy"   # options: original, random, sym, asym_x, asym_y, asym_xy
   cutout_rad_mpc: 20.0
   dz_rescale: 0.01
-  zmin: 0.7 # define if you want to limit the redshift range smaller than that in the catalog
-  zmax: 0.75
+  zmin:  # define if you want to limit the redshift range smaller than that in the catalog
+  zmax: 
 
 # ===============================
 # Paths
 # ===============================
 paths:
-  basepath: "/mnt/scratch-lustre/mlokken/stacking/ACTxDESI/orient_by_desi_lrgc_100/stacks/enmap/"
-  stack_pts_path: "/mnt/raid-cita/mlokken/data/desi/stacking_points/"
+  # basepath: "/mnt/scratch-lustre/mlokken/stacking/ACTxDESI/orient_by_desi_lrgc_100/stacks/enmap/"
+  basepath: "/mnt/scratch-lustre/mlokken/stacking/ACTxDESI/dr1_lrg_allpython/"
+  orient_file: "/mnt/scratch-lustre/mlokken/stacking/ACTxDESI/dr1_lrg_allpython/desi_dr1_lrgc_10pt0Mpc_cuts_asym_xy.csv"
 
 # ===============================
 # Maps to stack
