@@ -11,6 +11,7 @@ import pandas as pd
 import shutil
 h = (cosmo.H0/100.).value
 
+start = time.time()
 ##################################
 # Load config
 if len(sys.argv) != 2:
@@ -49,7 +50,6 @@ maxz = cfg["analysis"]["z_max"]
 ##################################
 
 
-
 if use_mpi:
     from mpi4py import MPI
     # get the MPI ingredients
@@ -83,6 +83,27 @@ if os.path.exists(save_file):
 else:
     print("Will save output to", save_file)
     
+zlist_tot = None
+ra_so_allranks = None
+dec_so_allranks = None
+z_so_allranks = None
+w_so_allranks = None
+ra_oo_allranks = None
+dec_oo_allranks = None
+z_oo_allranks = None
+w_oo_allranks = None
+ra_rand_allranks = None
+dec_rand_allranks = None
+z_rand_allranks = None
+w_rand_allranks = None
+counts_so = None
+counts_oo = None
+counts_rand = None
+displays_oo = None
+displays_so = None
+displays_rand = None
+zlist_chunks = None
+dlist_chunks = None
 # have rank 0 make the new directory and copy over config file, all others wait
 if rank == 0:
     if not os.path.exists(save_path):
@@ -93,48 +114,160 @@ if rank == 0:
     if not os.path.exists(os.path.join(save_path, os.path.basename(config_file_path))):
         shutil.copy(config_file_path, os.path.join(save_path, os.path.basename(config_file_path)))
 
-if use_mpi and size > 1:
-    comm.Barrier()  # wait for rank 0 to finish making the directory
 
+    if los_split_mode == 'custom_zlist':
+        # enter the pre-defined redshift bins as the first argument
+        zbins = cfg["analysis"]["z_bins"]
+        dlist_tot, zlist_tot = sao.dlist(cosmo, zlist=zbins)
 
-if los_split_mode == 'custom_zlist':
-    # enter the pre-defined redshift bins as the first argument
-    zbins = cfg["analysis"]["z_bins"]
-    dlist_tot, zlist_tot = sao.dlist(cosmo, zlist=zbins)
+    elif los_split_mode == 'custom_dlist':
+        # enter the pre-defined comoving distance bins as the first argument
+        dbins = cfg["analysis"]["chi_bins"]
+        dlist_tot, zlist_tot = sao.dlist(cosmo, dlist=dbins)
+        
+    elif los_split_mode == 'auto_overlap':
+        minz = minz+.005 # add small buffer
+        maxz = maxz-.005 # add small buffer
+        comoving_oo_narrowbin_start  = cosmo.comoving_distance(minz).to(u.Mpc)
+        comoving_oo_narrowbin_0 = np.array([comoving_oo_narrowbin_start.value, (comoving_oo_narrowbin_start+oo_width*u.Mpc).value])
+        nbins = int((cosmo.comoving_distance(maxz).to(u.Mpc).value - comoving_oo_narrowbin_start.value)/so_width)
+        dbins = [comoving_oo_narrowbin_0 + i * so_width for i in range(nbins)] 
+        print("Have you made sure to customize the width of the orientation and stacking slices? It is currently set to {:d} and {:d} Mpc with a mininum z of {:.2f} and maximum z of {:.2f}.".format(oo_width, so_width, minz, maxz))
+        dlist_tot, zlist_tot = sao.dlist(cosmo, dlist=dbins)    
 
-elif los_split_mode == 'custom_dlist':
-    # enter the pre-defined comoving distance bins as the first argument
-    dbins = cfg["analysis"]["chi_bins"]
-    dlist_tot, zlist_tot = sao.dlist(cosmo, dlist=dbins)
+    # save the zlist to a file
+    np.savetxt(os.path.join(save_path, "zlist.txt"), zlist_tot)
+
+    # load the center objects data
+    ra_so,dec_so,z_so,w_so = sao.get_radecz(stack_catalog, return_weight=True)
+    # if different, load the orientation data
+    if orient_catalog is not None:
+        ra_oo, dec_oo, z_oo, w_oo = sao.get_radecz(orient_catalog, return_weight=True)
+
+    if randoms_catalog is not None:
+        # load the randoms data
+        ra_rand, dec_rand, z_rand, w_rand = sao.get_radecz(randoms_catalog, return_weight=True)
+        
     
-elif los_split_mode == 'auto_overlap':
-    minz = minz+.005 # add small buffer
-    maxz = maxz-.005 # add small buffer
-    comoving_oo_narrowbin_start  = cosmo.comoving_distance(minz).to(u.Mpc)
-    comoving_oo_narrowbin_0 = np.array([comoving_oo_narrowbin_start.value, (comoving_oo_narrowbin_start+oo_width*u.Mpc).value])
-    nbins = int((cosmo.comoving_distance(maxz).to(u.Mpc).value - comoving_oo_narrowbin_start.value)/so_width)
-    dbins = [comoving_oo_narrowbin_0 + i * so_width for i in range(nbins)] 
-    print("Have you made sure to customize the width of the orientation and stacking slices? It is currently set to {:d} and {:d} Mpc with a mininum z of {:.2f} and maximum z of {:.2f}.".format(oo_width, so_width, minz, maxz))
-    dlist_tot, zlist_tot = sao.dlist(cosmo, dlist=dbins)    
-
-# save the zlist to a file
-np.savetxt(os.path.join(save_path, "zlist.txt"), zlist_tot)
-
-nside = 512
-npix  = hp.nside2npix(nside)
-th, ph = hp.pixelfunc.pix2ang(nside, np.arange(npix))
-cotth = np.cos(th)/np.sin(th)
-# load the center objects data
-ra_so,dec_so,z_so,w_so = sao.get_radecz(stack_catalog, return_weight=True)
-# if different, load the orientation data
-if orient_catalog is not None:
-    ra_oo, dec_oo, z_oo, w_oo = sao.get_radecz(orient_catalog, return_weight=True)
-
-if randoms_catalog is not None:
-    # load the randoms data
-    ra_rand, dec_rand, z_rand, w_rand = sao.get_radecz(randoms_catalog, return_weight=True)
-
     
+    if size > 1:
+        
+        # divide all catalogs into z bins to be shared across the nodes
+        # prepare the lists for sending
+        ra_so_allranks = []
+        dec_so_allranks = []
+        z_so_allranks = []
+        w_so_allranks = []
+        if orient_catalog is not None:
+            ra_oo_allranks = []
+            dec_oo_allranks = []
+            z_oo_allranks = []
+            w_oo_allranks = []
+        if randoms_catalog is not None:
+            ra_rand_allranks = []
+            dec_rand_allranks = []
+            z_rand_allranks = []
+            w_rand_allranks = []
+            
+        # split the zlist into 'size'-length chunks
+        zlist_chunks = np.array_split(zlist_tot, size)
+        dlist_chunks = np.array_split(dlist_tot, size)
+        # for each chunk, take only the ra and dec data in that redshift and store to send to that rank
+        for rank_i in range(size):
+            z_min_i = zlist_chunks[rank_i][0][0] - 0.01 # add small buffer
+            z_max_i = zlist_chunks[rank_i][-1][1] + 0.01 # add small buffer
+            in_bin_i = (z_so>z_min_i) & (z_so<z_max_i)
+            ra_so_allranks.append(ra_so[in_bin_i])
+            dec_so_allranks.append(dec_so[in_bin_i])
+            z_so_allranks.append(z_so[in_bin_i])
+            w_so_allranks.append(w_so[in_bin_i])
+            if orient_catalog is not None:
+                in_bin_i = (z_oo>z_min_i) & (z_oo<z_max_i)
+                ra_oo_allranks.append(ra_oo[in_bin_i])
+                dec_oo_allranks.append(dec_oo[in_bin_i])
+                z_oo_allranks.append(z_oo[in_bin_i])
+                w_oo_allranks.append(w_oo[in_bin_i])
+            if randoms_catalog is not None:
+                in_bin_i = (z_rand>z_min_i) & (z_rand<z_max_i)
+                ra_rand_allranks.append(ra_rand[in_bin_i])
+                dec_rand_allranks.append(dec_rand[in_bin_i])
+                z_rand_allranks.append(z_rand[in_bin_i])
+                w_rand_allranks.append(w_rand[in_bin_i])
+
+        counts_so = np.array([len(arr) for arr in ra_so_allranks])
+        displays_so = np.insert(np.cumsum(counts_so), 0, 0)[0:-1] # the starting index for each rank's chunk in the concatenated array
+        ra_so_allranks = np.concatenate(ra_so_allranks)
+        dec_so_allranks = np.concatenate(dec_so_allranks)
+        z_so_allranks = np.concatenate(z_so_allranks)
+        w_so_allranks = np.concatenate(w_so_allranks)
+        
+        if orient_catalog is not None:
+            counts_oo = np.array([len(arr) for arr in ra_oo_allranks])
+            displays_oo = np.insert(np.cumsum(counts_oo), 0, 0)[0:-1]
+            ra_oo_allranks = np.concatenate(ra_oo_allranks)
+            dec_oo_allranks = np.concatenate(dec_oo_allranks)
+            z_oo_allranks = np.concatenate(z_oo_allranks)
+            w_oo_allranks = np.concatenate(w_oo_allranks)
+            
+        if randoms_catalog is not None:
+            counts_rand = np.array([len(arr) for arr in ra_rand_allranks])
+            displays_rand = np.insert(np.cumsum(counts_rand), 0, 0)[0:-1]
+            ra_rand_allranks = np.concatenate(ra_rand_allranks)
+            dec_rand_allranks = np.concatenate(dec_rand_allranks)
+            z_rand_allranks = np.concatenate(z_rand_allranks)
+            w_rand_allranks = np.concatenate(w_rand_allranks)
+            
+        
+if size>1 and rank>0:
+    # comm.Barrier()  # wait for rank 0 to finish these tasks
+    time_to_initiate = time.time()
+    print(f"Time that rank {rank} waited to receive data: {time_to_initiate - start:.2f} seconds.")
+
+if size>1:
+    # Share metadata with all ranks
+    counts_so = comm.bcast(counts_so, root=0)
+    if orient_catalog is not None:
+        counts_oo = comm.bcast(counts_oo, root=0)
+    if randoms_catalog is not None:
+        counts_rand = comm.bcast(counts_rand, root=0)
+    zlist_chunks = comm.bcast(zlist_chunks, root=0)
+    zlist_tot = zlist_chunks[rank]
+    dlist_chunks = comm.bcast(dlist_chunks, root=0)
+    dlist_tot = dlist_chunks[rank]
+    # displs = comm.bcast(displs, root=0)
+    # prepare to receive
+    ra_so = np.empty(counts_so[rank], dtype=np.float64)
+    # send the data with scatterv
+    comm.Scatterv([ra_so_allranks, counts_so, displays_so, MPI.DOUBLE], ra_so, root=0)
+    dec_so = np.empty(counts_so[rank], dtype=np.float64)
+    comm.Scatterv([dec_so_allranks, counts_so, displays_so, MPI.DOUBLE], dec_so, root=0)
+    z_so = np.empty(counts_so[rank], dtype=np.float64)
+    comm.Scatterv([z_so_allranks, counts_so, displays_so, MPI.DOUBLE], z_so, root=0)
+    w_so = np.empty(counts_so[rank], dtype=np.float64)
+    comm.Scatterv([w_so_allranks, counts_so, displays_so, MPI.DOUBLE], w_so, root=0)
+    if orient_catalog is not None:
+        ra_oo = np.empty(counts_oo[rank], dtype=np.float64)
+        comm.Scatterv([ra_oo_allranks, counts_oo, displays_oo, MPI.DOUBLE], ra_oo, root=0)
+        dec_oo = np.empty(counts_oo[rank], dtype=np.float64)
+        comm.Scatterv([dec_oo_allranks, counts_oo, displays_oo, MPI.DOUBLE], dec_oo, root=0)
+        z_oo = np.empty(counts_oo[rank], dtype=np.float64)
+        comm.Scatterv([z_oo_allranks, counts_oo, displays_oo, MPI.DOUBLE], z_oo, root=0)
+        w_oo = np.empty(counts_oo[rank], dtype=np.float64)
+        comm.Scatterv([w_oo_allranks, counts_oo, displays_oo, MPI.DOUBLE], w_oo, root=0)
+    if randoms_catalog is not None:
+        ra_rand = np.empty(counts_rand[rank], dtype=np.float64)
+        comm.Scatterv([ra_rand_allranks, counts_rand, displays_rand, MPI.DOUBLE], ra_rand, root=0)
+        dec_rand = np.empty(counts_rand[rank], dtype=np.float64)
+        comm.Scatterv([dec_rand_allranks, counts_rand, displays_rand, MPI.DOUBLE], dec_rand, root=0)
+        z_rand = np.empty(counts_rand[rank], dtype=np.float64)
+        comm.Scatterv([z_rand_allranks, counts_rand, displays_rand, MPI.DOUBLE], z_rand, root=0)
+        w_rand = np.empty(counts_rand[rank], dtype=np.float64)
+        comm.Scatterv([w_rand_allranks, counts_rand, displays_rand, MPI.DOUBLE], w_rand, root=0)
+        
+    sending_time = time.time()
+    print(f"Time that rank {rank} took to receive data: {sending_time - start:.2f} seconds.")
+            
+        
 alpha_all = []
 xpol_all = []
 ypol_all = []
@@ -144,11 +277,19 @@ ra_all = []
 dec_all = []
 z_all = []
 
-total_time = 0
+if zlist_tot is None:
+    zlist_tot = np.loadtxt(os.path.join(save_path, "zlist.txt"))
 
+# prepare the cotangent theta values for the healpix maps
+nside = 512
+npix  = hp.nside2npix(nside)
+th, ph = hp.pixelfunc.pix2ang(nside, np.arange(npix))
+cotth = np.cos(th)/np.sin(th)
+
+#### This is where the main calculations happen ####
+zloop_begin = time.time()
 for i in range(len(zlist_tot)):
-    
-    start = time.time()
+    zbin_start_time = time.time()
     dbin, zbin = dlist_tot[i], zlist_tot[i]
     oo_dlow,oo_dhi = dbin[0], dbin[1]
     oo_zlow,oo_zhi = zbin[0], zbin[1]
@@ -226,7 +367,7 @@ for i in range(len(zlist_tot)):
         pkmap = os.path.join(save_path, "maps", "odmap_{:s}_{:d}_{:s}.fits".format(orient_mode, pct, binstr_orient))
         hp.write_map(pkmap, odmap, overwrite=True, dtype=np.float32)
     
-    start = time.time()
+    
     if orient_mode in ['asym_xy', 'asym_x', 'asym_y']:
         return_xy_pol = True
     else:
@@ -242,10 +383,67 @@ for i in range(len(zlist_tot)):
     ra_all.extend(ra_so_bin[final_cut])
     dec_all.extend(dec_so_bin[final_cut])
     z_all.extend(z_so_bin[final_cut])
+    
     end = time.time()
-    print(f"Time elapsed for bin {i} out of {len(zlist_tot)}: {end-start:.2f} seconds.")
-    total_time += end-start
-print("Total time was", total_time, "seconds, or {:.2f} minutes.".format(total_time/60.))
+    print(f"Time elapsed for bin {i} out of {len(zlist_tot)} on rank {rank}: {end- zbin_start_time:.2f} seconds.")
+    
+tot_time = time.time() - zloop_begin
+print(f"Total time for processing zbins was {tot_time:.0f} seconds, or {(tot_time/60.):.2f} minutes on rank {rank}.")
 
-df = pd.DataFrame({'RA':ra_all, 'DEC':dec_all, 'Z':z_all, 'alpha':alpha_all, 'x_asym':xpol_all, 'y_asym':ypol_all, 'config':os.path.basename(config_file_path).replace('.yaml','')})
-df.to_csv(save_file, index=False)
+# all into arrays
+alpha_all = np.asarray(alpha_all)
+xpol_all = np.asarray(xpol_all)
+ypol_all = np.asarray(ypol_all)
+ca_all = np.asarray(ca_all)
+sa_all = np.asarray(sa_all)
+ra_all = np.asarray(ra_all)
+dec_all = np.asarray(dec_all)
+z_all = np.asarray(z_all)
+
+    
+if size>1:
+    n_local = len(ra_all)
+    # gather results
+    counts = comm.gather(n_local, root=0)
+    if rank == 0:
+        counts = np.array(counts)
+        displs = np.insert(np.cumsum(counts), 0, 0)[:-1]
+        total_size  = np.sum(counts)
+        recvbuf_ra = np.empty(total_size, dtype=np.float64)
+        recvbuf_dec = np.empty(total_size, dtype=np.float64)
+        recvbuf_z = np.empty(total_size, dtype=np.float64)
+        recvbuf_alpha = np.empty(total_size, dtype=np.float64)
+        recvbuf_xpol = np.empty(total_size, dtype=np.int32)
+        recvbuf_ypol = np.empty(total_size, dtype=np.int32)
+    else:
+        recvbuf_ra = None
+        recvbuf_dec = None
+        recvbuf_z = None
+        recvbuf_alpha = None
+        recvbuf_xpol = None
+        recvbuf_ypol = None
+        counts = None
+        displs = None
+
+
+    comm.Gatherv(np.asarray(ra_all), [recvbuf_ra, counts, displs, MPI.DOUBLE], root=0)
+    comm.Gatherv(np.asarray(dec_all), [recvbuf_dec, counts, displs, MPI.DOUBLE], root=0)
+    comm.Gatherv(np.asarray(z_all), [recvbuf_z, counts, displs, MPI.DOUBLE], root=0)
+    comm.Gatherv(np.asarray(alpha_all), [recvbuf_alpha, counts, displs, MPI.DOUBLE], root=0)    
+    comm.Gatherv(np.asarray(xpol_all), [recvbuf_xpol, counts, displs, MPI.INT], root=0)
+    comm.Gatherv(np.asarray(ypol_all), [recvbuf_ypol, counts, displs, MPI.INT], root=0)
+
+    ra_all = recvbuf_ra
+    dec_all = recvbuf_dec
+    z_all = recvbuf_z
+    alpha_all = recvbuf_alpha
+    xpol_all = recvbuf_xpol
+    ypol_all = recvbuf_ypol
+    
+
+# only rank 0 writes to file
+if rank==0:
+    df = pd.DataFrame({'RA':ra_all, 'DEC':dec_all, 'Z':z_all, 'alpha':alpha_all, 'x_asym':xpol_all, 'y_asym':ypol_all, 'config':os.path.basename(config_file_path).replace('.yaml','')})
+    df.to_csv(save_file, index=False)
+    
+print(f"Final time: {time.time() - start:.2f} seconds.")

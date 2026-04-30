@@ -9,7 +9,7 @@ mpi:
 # ===============================
 run:
   restart_run: false
-  newdir_name: "actdesi_lrgs_p7_p9_norot/"
+  newdir_name: "actdesi_lrgs_p7_p9_norot_rhtest/"
   test: true
   nObj_test: 10000   # only used if test=true
 
@@ -17,8 +17,8 @@ run:
 # Error estimation
 # ===============================
 errors:
-  enabled: false
-  nreg: 3   # number of regions if enabled
+  enabled: true
+  nreg: 8   # number of regions if enabled
 
 # ===============================
 # Input catalog constraints

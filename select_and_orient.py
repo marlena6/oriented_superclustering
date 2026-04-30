@@ -81,9 +81,6 @@ def delta_g(nside, ra, dec, ra_rand=None, dec_rand=None, catalog_weights=None, r
         rand_pix = hp.ang2pix(nside, ra_rand, dec_rand, lonlat=True)
         np.add.at(rand_map, rand_pix, randoms_weights)
         # print("sum data", np.sum(data_map), "sum rand", np.sum(rand_map))
-
-        hp.mollview(rand_map, max=.005)
-        hp.mollview(data_map, max=.005)
         alpha = np.sum(catalog_weights)/np.sum(randoms_weights)
         # print("alpha is", alpha)
 
@@ -102,7 +99,7 @@ def delta_g(nside, ra, dec, ra_rand=None, dec_rand=None, catalog_weights=None, r
         # print("Mean data:", np.mean(data_map[is_observed]))
         # print("Mean rand:", np.mean(rand_map[is_observed]))
         # print("Mean of delta map is", np.mean(delta_map[is_observed]))
-        hp.mollview(delta_map, max=0.5, min=-0.5)
+        # hp.mollview(delta_map, max=0.5, min=-0.5)
         
         return delta_map, mask
         
@@ -292,4 +289,4 @@ def measure_orientation(ra, dec, overdensity_map, cotth, e_min=None, e_max=None,
             if grad_e1<0:
                 y_pol[i] = -1
     
-    return alpha, x_pol, y_pol, ca, sa, final_cut
+    return alpha, x_pol.astype(np.int32), y_pol.astype(np.int32), ca, sa, final_cut

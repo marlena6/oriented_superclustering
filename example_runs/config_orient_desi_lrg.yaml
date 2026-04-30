@@ -8,7 +8,7 @@ mpi:
 # Run control
 # ===============================
 run:
-  save_path: "/mnt/scratch-lustre/mlokken/stacking/ACTxDESI/dr1_lrg_allpython/"
+  save_path: "/mnt/scratch-lustre/mlokken/stacking/ACTxDESI/dr1_lrg_allpython_testmpi/"
   write_maps_to_file: false
   filenames_in_Mpc: True
 
@@ -19,6 +19,7 @@ files:
   stacking_object_catalog: "/mnt/raid-cita/mlokken/data/desi/LRG_clustering_Y1_zred_desi_complete_thresh0.7_excl0.4deg_ACTmasked.fits" # double-masked version
   orient_object_catalog: "/mnt/raid-cita/mlokken/data/desi/LRG_clustering_ML.dat.fits"
   randoms_catalog: "/mnt/raid-cita/mlokken/data/desi/randoms/LRG_comb11_clustering.ran.fits"
+  mask:
 
 # ===============================
 # Stacking / analysis options
@@ -36,4 +37,4 @@ analysis:
   orient_objects_label: 'desi_dr1_lrgc'
   healpix_nside: 1024
   z_min: 0.6
-  z_max: 0.65
+  z_max: 0.62
