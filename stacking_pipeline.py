@@ -188,8 +188,7 @@ else:
 # if the unit of cutout_rad is Mpc, then we need to convert it to degrees
 if cutout_rad.unit == u.Mpc:
     # find out the stack geometry based on the redshift where the cutout size is largest in angular units
-    z_array = np.linspace(zmin, zmax, int((zmax - zmin) / dz_rescale))
-    print(len(z_array))
+    z_array = np.linspace(zmin, zmax, int((zmax - zmin) / dz_rescale) + 1)
     angular_size_z = cosmo.arcsec_per_kpc_comoving(z_array).to(u.arcmin / u.Mpc) * cutout_rad
     z_largest_cutout = z_array[np.argmax(angular_size_z)]
     print("Cutout size is largest at z =", z_largest_cutout)
@@ -318,9 +317,9 @@ if not os.path.exists(file_i):
                 print(f"Extracted thumbnails for region {n} in {thumbs_time_end - thumbs_time:.1f} seconds.")
                 
                 stacking_start = time.time()
-                for z in np.linspace(
-                    zmin, zmax, int((zmax - zmin) / dz_rescale)
-                ):  # iterate through small z bins
+                
+                for i in range(len(z_array)-1): # iterate through small z bins
+                    z = z_array[i] # just use the lower z of this slice
                     Mpc_per_deg_phys_z = cosmo.kpc_proper_per_arcmin(z).to(
                         u.Mpc / u.degree
                     )
@@ -329,8 +328,8 @@ if not os.path.exists(file_i):
                     )
                     phys_rescale_factor = Mpc_per_deg_phys_base / Mpc_per_deg_phys_z
                     comov_rescale_factor = Mpc_per_deg_comov_base / Mpc_per_deg_comov_z
-                    inz = (cat.Z[in_reg] < (z + dz_rescale)) & (cat.Z[in_reg] > (z - dz_rescale))
-                    z_rescale_str = f"z_{(z - dz_rescale):.2f}_{(z + dz_rescale):.2f}"
+                    inz = (cat.Z[in_reg] < (z_array[i+1])) & (cat.Z[in_reg] > (z_array[i]))
+                    z_rescale_str = f"z_{z_array[i]:.2f}_{z_array[i+1]:.2f}"
                     z_group = reg_group.create_group(z_rescale_str)  # create a subgroup
                     
                     # make the ChunkObj for these z
