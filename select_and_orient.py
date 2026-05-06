@@ -26,7 +26,10 @@ def get_radecz(filepath, return_id=False, return_weight=False):
             ra = data['ra']
             dec = data['dec']
             z  = data['z']
-            id = data['sub_idx']
+            if 'sub_idx' in data.keys():
+                id = data['sub_idx']
+            else:
+                id = np.arange(len(ra))
             w  = np.ones(len(ra))
     else:
         print("unrecognized file format")
@@ -70,24 +73,24 @@ def delta_g(nside, ra, dec, ra_rand=None, dec_rand=None, catalog_weights=None, r
         else:
             npix = data_map.size
         mean = np.sum(data_map)/npix
-        data_map = data_map / mean - 1.
+        delta_map = data_map / mean - 1.
         if smth>0:
-            data_map = hp.sphtfunc.smoothing(data_map, fwhm = np.deg2rad(smth/60.), pol=False)
+            delta_map = hp.sphtfunc.smoothing(delta_map, fwhm = np.deg2rad(smth/60.), pol=False)
         if mask is not None:
-            data_map *= mask
-        return data_map
+            delta_map *= mask # set masked pixels to zero to get rid of bleeding over edges
+        return delta_map
     else:
         rand_map = np.zeros((hp.nside2npix(nside)))
         rand_pix = hp.ang2pix(nside, ra_rand, dec_rand, lonlat=True)
         np.add.at(rand_map, rand_pix, randoms_weights)
         # print("sum data", np.sum(data_map), "sum rand", np.sum(rand_map))
         alpha = np.sum(catalog_weights)/np.sum(randoms_weights)
-        # print("alpha is", alpha)
+        print("alpha is", alpha)
 
         delta_map = np.zeros(data_map.size)
         smoothed_data_map = hp.sphtfunc.smoothing(data_map, fwhm = np.deg2rad(smth/60.), pol=False)
-        smoothed_rand_map = hp.sphtfunc.smoothing(rand_map, fwhm = np.deg2rad(smth/60.), pol=False)
-        smoothed_diff_map = smoothed_data_map - alpha * smoothed_rand_map
+        smoothed_rand_map = hp.sphtfunc.smoothing(alpha * rand_map, fwhm = np.deg2rad(smth/60.), pol=False)
+        smoothed_diff_map = smoothed_data_map - smoothed_rand_map
         
         threshold= 0.2 * np.mean(smoothed_rand_map)
         # print("Min of randoms within threhsold is", np.min(smoothed_rand_map[smoothed_rand_map>threshold]))
@@ -96,9 +99,9 @@ def delta_g(nside, ra, dec, ra_rand=None, dec_rand=None, catalog_weights=None, r
         # print("Mean smoothed diff", np.mean(smoothed_diff_map[is_observed]), "Mean smoothed rand", np.mean(smoothed_rand_map[is_observed]), "Mean smoothed data", np.mean(smoothed_data_map[is_observed]), "ratio data to rand with alpha", np.mean(smoothed_data_map[is_observed])/(alpha*np.mean(smoothed_rand_map[is_observed])))
         delta_map[mask] = smoothed_diff_map[mask] / smoothed_rand_map[mask]
         # define the mask as wherever the randoms counts are below the threshold
-        # print("Mean data:", np.mean(data_map[is_observed]))
-        # print("Mean rand:", np.mean(rand_map[is_observed]))
-        # print("Mean of delta map is", np.mean(delta_map[is_observed]))
+        print("Mean data:", np.mean(data_map[mask]))
+        print("Mean rand:", np.mean(rand_map[mask]))
+        print("Mean of delta map is", np.mean(delta_map[mask]))
         # hp.mollview(delta_map, max=0.5, min=-0.5)
         
         return delta_map, mask
@@ -128,11 +131,9 @@ def dlist(cosmo, minz=None, maxz=None, slice_width=None, offset=0, zlist=None, d
     elif dlist is not None:
         dlist = np.asarray(dlist)
         zlist = [[z_at_value(cosmo.comoving_distance, d[0]*u.Mpc).value, z_at_value(cosmo.comoving_distance, d[1]*u.Mpc).value] for d in dlist]
-        print(zlist)
     else:
         dlist = []
         nbins = int((cosmo.comoving_distance(maxz).value - cosmo.comoving_distance(minz).value) // slice_width)
-        print("Number of distance bins: %d" %nbins)
         for i in range(nbins):
             dist_slice_min = cosmo.comoving_distance(minz)+float(offset)*u.Mpc + slice_width*u.megaparsec*i
             dist_slice_max = dist_slice_min + slice_width*u.megaparsec
@@ -195,8 +196,13 @@ def tidal_field(alms, nside, cotth, return_grads=True):
 
 def measure_orientation(ra, dec, overdensity_map, cotth, e_min=None, e_max=None, nu_min=None, mode='density', return_xy_pol=True, mask=None):
     # standard check: ensure zero mean
-    assert np.abs(np.mean(overdensity_map)) < 1e-3, "The input map does not have zero mean."
-    
+    if mask is None:
+        assert np.abs(np.mean(overdensity_map)) < .1, "The input map does not have zero mean."
+    else:
+        # make sure mask is binary
+        assert np.all((mask==0) | (mask==1)), "Mask should be binary (0 or 1)."
+        assert np.abs(np.mean(overdensity_map[mask>0])) < .1, "The input map does not have zero mean within the mask."
+
     nside = hp.get_nside(overdensity_map)
     alms  = hp.sphtfunc.map2alm(overdensity_map, pol=False)
     
