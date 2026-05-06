@@ -216,7 +216,8 @@ if rank == 0:
             dec_rand_allranks = np.concatenate(dec_rand_allranks)
             z_rand_allranks = np.concatenate(z_rand_allranks)
             w_rand_allranks = np.concatenate(w_rand_allranks)
-            
+    if mask is not None:
+        mask = hp.read_map(mask, dtype=np.float32)       
         
 if size>1 and rank>0:
     # comm.Barrier()  # wait for rank 0 to finish these tasks
@@ -263,7 +264,8 @@ if size>1:
         comm.Scatterv([z_rand_allranks, counts_rand, displays_rand, MPI.DOUBLE], z_rand, root=0)
         w_rand = np.empty(counts_rand[rank], dtype=np.float64)
         comm.Scatterv([w_rand_allranks, counts_rand, displays_rand, MPI.DOUBLE], w_rand, root=0)
-        
+    if mask is not None:
+        mask = comm.bcast(mask, root=0)
     sending_time = time.time()
     print(f"Time that rank {rank} took to receive data: {sending_time - start:.2f} seconds.")
             
@@ -356,7 +358,7 @@ for i in range(len(zlist_tot)):
     if randoms_catalog is not None:
         odmap, mask = sao.delta_g(nside, ra_oo_bin, dec_oo_bin, ra_rand=ra_rand_bin, dec_rand=dec_rand_bin, catalog_weights=w_oo_bin, randoms_weights=w_rand_bin, smth=smth_arcmin)
     elif mask is not None:
-        odmap, mask = sao.delta_g(nside, ra_oo_bin, dec_oo_bin, catalog_weights=w_oo_bin, mask=mask, smth=smth_arcmin)
+        odmap = sao.delta_g(nside, ra_oo_bin, dec_oo_bin, catalog_weights=w_oo_bin, mask=mask, smth=smth_arcmin)
     
     
     # save the map
