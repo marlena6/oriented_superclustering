@@ -28,7 +28,7 @@ filenames_in_Mpc = cfg["run"]["filenames_in_Mpc"] # if True, the filenames will 
 stack_catalog = cfg["files"]["stacking_object_catalog"]
 orient_catalog  = cfg["files"]["orient_object_catalog"]
 randoms_catalog = cfg["files"]["randoms_catalog"]
-mask = cfg["files"]["mask"] # if not None, should be a binary mask: fits file with 1s in the area to use and 0s in the area to mask out
+maskfile = cfg["files"]["mask"] # if not None, should be a binary mask: fits file with 1s in the area to use and 0s in the area to mask out
 
 nu_min = cfg["analysis"]["nu_min"]
 nu_max = cfg["analysis"]["nu_max"]
@@ -82,7 +82,9 @@ if os.path.exists(save_file):
     raise ValueError(f"Output file {save_file} already exists. Please change the save_path or delete the existing file to avoid overwriting.")
 else:
     print("Will save output to", save_file)
-    
+
+if maskfile is not None:
+    mask = hp.read_map(maskfile)
 zlist_tot = None
 ra_so_allranks = None
 dec_so_allranks = None
@@ -215,9 +217,7 @@ if rank == 0:
             ra_rand_allranks = np.concatenate(ra_rand_allranks)
             dec_rand_allranks = np.concatenate(dec_rand_allranks)
             z_rand_allranks = np.concatenate(z_rand_allranks)
-            w_rand_allranks = np.concatenate(w_rand_allranks)
-    if mask is not None:
-        mask = hp.read_map(mask, dtype=np.float32)       
+            w_rand_allranks = np.concatenate(w_rand_allranks)  
         
 if size>1 and rank>0:
     # comm.Barrier()  # wait for rank 0 to finish these tasks
@@ -283,7 +283,6 @@ if zlist_tot is None:
     zlist_tot = np.loadtxt(os.path.join(save_path, "zlist.txt"))
 
 # prepare the cotangent theta values for the healpix maps
-nside = 512
 npix  = hp.nside2npix(nside)
 th, ph = hp.pixelfunc.pix2ang(nside, np.arange(npix))
 cotth = np.cos(th)/np.sin(th)
@@ -357,7 +356,7 @@ for i in range(len(zlist_tot)):
     smth_arcmin = (cosmo.arcsec_per_kpc_comoving(z_mid) * (smth*u.Mpc)).to(u.arcmin).value
     if randoms_catalog is not None:
         odmap, mask = sao.delta_g(nside, ra_oo_bin, dec_oo_bin, ra_rand=ra_rand_bin, dec_rand=dec_rand_bin, catalog_weights=w_oo_bin, randoms_weights=w_rand_bin, smth=smth_arcmin)
-    elif mask is not None:
+    elif maskfile is not None:
         odmap = sao.delta_g(nside, ra_oo_bin, dec_oo_bin, catalog_weights=w_oo_bin, mask=mask, smth=smth_arcmin)
     
     
@@ -374,7 +373,7 @@ for i in range(len(zlist_tot)):
         return_xy_pol = True
     else:
         return_xy_pol = False
-    
+    print("Getting orientations.")
     alpha, x_pol, y_pol, ca, sa, final_cut = sao.measure_orientation(ra_so_bin, dec_so_bin, odmap, cotth, e_min=e_min, e_max=e_max, nu_min=nu_min, mode='density', return_xy_pol=return_xy_pol, mask=mask)
     
     alpha_all.extend(alpha)
