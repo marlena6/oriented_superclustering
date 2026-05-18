@@ -36,11 +36,9 @@ class Catalog(object):
                 sel = np.random.choice(len(data['RA']), self.nObj, replace=False)
             else:
                 sel = np.arange(len(data['RA'])) # just index all objects, don't change ordering
-            print("selection")
             self.RA = data['RA'][sel].to_numpy() # [deg]
             self.DEC = data['DEC'][sel].to_numpy()  # [deg]
             self.Z = data['Z'][sel].to_numpy()
-            print("getting others")
             self.alpha = None
             self.x_asym = None
             self.y_asym = None

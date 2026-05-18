@@ -264,7 +264,7 @@ if size>1:
         comm.Scatterv([z_rand_allranks, counts_rand, displays_rand, MPI.DOUBLE], z_rand, root=0)
         w_rand = np.empty(counts_rand[rank], dtype=np.float64)
         comm.Scatterv([w_rand_allranks, counts_rand, displays_rand, MPI.DOUBLE], w_rand, root=0)
-    if mask is not None:
+    if maskfile is not None:
         mask = comm.bcast(mask, root=0)
     sending_time = time.time()
     print(f"Time that rank {rank} took to receive data: {sending_time - start:.2f} seconds.")
