@@ -9,16 +9,16 @@ mpi:
 # ===============================
 run:
   restart_run: false
-  newdir_name: "fl_hiagn_p65_p7/"
-  test: false
+  newdir_name: "fl_profile/"
+  test: true
   nObj_test: 1000   # only used if test=true
 
 # ===============================
 # Error estimation
 # ===============================
 errors:
-  enabled: false
-  nreg: 3   # number of regions if enabled
+  enabled: true
+  nreg: 4   # number of regions if enabled
 
 # ===============================
 # Input catalog constraints

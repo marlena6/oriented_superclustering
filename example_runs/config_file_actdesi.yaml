@@ -18,13 +18,7 @@ run:
 # ===============================
 errors:
   enabled: true
-  nreg: 20   # number of regions if enabled
-
-# ===============================
-# Input catalog constraints
-# ===============================
-catalog:
-  constraint_str: "lrgc_nocut_lrgc_nocut_noorient_100pct_0.7_0.9"
+  nreg: 4   # number of regions if enabled
 
 # ===============================
 # Stacking / analysis options
@@ -33,8 +27,8 @@ analysis:
   orient: "original" # "asym_xy"   # options: original, random, sym, asym_x, asym_y, asym_xy
   cutout_rad_mpc: 20.0
   dz_rescale: 0.01
-  zmin: 0.7 # define if you want to limit the redshift range smaller than that in the catalog
-  zmax: 0.9
+  zmin:  # define if you want to limit the redshift range smaller than that in the catalog
+  zmax: 
 
 # ===============================
 # Paths
