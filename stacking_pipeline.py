@@ -255,6 +255,9 @@ if not os.path.exists(file_i):
                 # make an HDF5 group for this region
                 reg_group = map_group.create_group(f"reg_{n}")
                 reg_group.attrs["Region"] = n
+                reg_group_diffs = map_group.create_group(f"reg_diff_{n}")
+                reg_group_diffs.attrs["Region"] = n
+
                 print(f"Analyzing region {n}")
                 # define the map edges for this region
                 sc = SkyCoord(ra=cat.RA[in_reg]*u.deg, dec=cat.DEC[in_reg]*u.deg, frame="icrs")
@@ -267,7 +270,8 @@ if not os.path.exists(file_i):
                     sc.dec.min() - (cutout_rad_deg+0.5*u.deg),
                     sc.dec.max() + (cutout_rad_deg+0.5*u.deg),
                 )
-                
+                # print(f"min coords = [{np.radians(lowra.value)}, {np.radians(sc.ra.min())},{np.radians(lowdec.value - sc.dec.min())}]")
+                # print(f"max coords = [{np.radians(highra.value)},{np.radians(sc.ra.max())},{np.radians(highdec.value - sc.dec.max())}]")
                 if size > 1:
                     # check for region crossing the RA = 180 deg line
                     if abs(highra - lowra) > 180*u.deg:
@@ -279,6 +283,7 @@ if not os.path.exists(file_i):
                         )
                         
                     print(f"Reading chunk of map with bounds RA: [{lowra:.2f},{highra:.2f}], Dec: [{lowdec:.2f},{highdec:.2f}]")
+                    
                     imap = enmap.read_map(
                         maps[m]["path"],
                         box=[
@@ -293,6 +298,24 @@ if not os.path.exists(file_i):
                 ra_inreg = cat.RA[in_reg]
                 dec_inreg = cat.DEC[in_reg]
                 z_inreg = cat.Z[in_reg]
+
+                diff_lowra_inreg= (ra_inreg - lowra.value)
+                diff_highra_inreg = (highra.value-ra_inreg )
+                diff_lowdec_inreg= (dec_inreg - lowdec.value)
+                diff_highdec_inreg = (highdec.value-dec_inreg)
+
+                if test:
+                    plt.hist(diff_lowra_inreg, bins=50, alpha=0.5, label="diff_lowra")
+                    plt.hist(diff_highra_inreg, bins=50, alpha=0.5, label="diff_highra")
+                    plt.legend()
+                    plt.savefig(f"{savepath}/region_{n}_ra_diffs.png")
+                    plt.clf()
+                    plt.hist(diff_lowdec_inreg, bins=50, alpha=0.5, label="diff_lowdec")
+                    plt.hist(diff_highdec_inreg, bins=50, alpha=0.5, label="diff_highdec")
+                    plt.legend()
+                    plt.savefig(f"{savepath}/region_{n}_dec_diffs.png")
+                    plt.clf()
+
                 chunkObj_reg = Chunk(
                         ra_inreg,
                         dec_inreg,
@@ -373,6 +396,13 @@ if not os.path.exists(file_i):
                     z_group.create_dataset("z", data=z_inreg[inz])
                     nobj_regn += chunkObj.nObj
                 reg_group.attrs["Nobj"] = nobj_regn
+                reg_group_diffs.attrs["Nobj"] = nobj_regn
+                reg_group_diffs.create_dataset("diff_lowra", data=diff_lowra_inreg)
+                reg_group_diffs.create_dataset("diff_highra", data=diff_highra_inreg)
+                reg_group_diffs.create_dataset("diff_lowdec", data=diff_lowdec_inreg)
+                reg_group_diffs.create_dataset("diff_highdec", data=diff_highdec_inreg)
+
+                
 else:
     assert restart_run, (
         f"File {file_i} already exists. If you want to retry consolidating the files, set restart_run=True."
