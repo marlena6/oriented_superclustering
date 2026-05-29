@@ -128,7 +128,7 @@ def CAP_2D(f, R):
     y_coords = np.linspace(xy_min, xy_max, rows)
 
     pixel_size = (x_coords[1] - x_coords[0])
-    # pixArea = (pixel_size)**2
+    pixArea = (pixel_size)**2
     
     # Create meshgrid of coordinates
     X, Y = np.meshgrid(x_coords, y_coords)
@@ -142,10 +142,19 @@ def CAP_2D(f, R):
         inDisk = 1.0 * (radial_distances <= r)
         inRing = 1.0 * (radial_distances > r) * (radial_distances <= r1)
         inRing *= np.sum(inDisk) / np.sum(inRing)
-        CAP_vals[i] = float(np.sum((inDisk - inRing) * f))
+        CAP_vals[i] = float(np.sum((inDisk - inRing) * f * pixArea))
     return (r_vals, CAP_vals)
 
 def CAP_2D_multipole(f, mmax, R):
+    """ 
+    Compute the 2D CAP filter profile for moments m of the image
+    Args:
+    f: image
+    mmax: m
+    R: radius [units]
+    Output:
+    r_disk [same units as R], cap_profile_cos [units of R squared], cap_profile sin [units of R squared]
+    """
     import matplotlib.pyplot as plt
     rows, cols = f.shape
     xy_min, xy_max = (-R, R)
@@ -155,7 +164,7 @@ def CAP_2D_multipole(f, mmax, R):
     y_coords = np.linspace(xy_min, xy_max, rows)
 
     pixel_size = (x_coords[1] - x_coords[0])
-    # pixArea = (pixel_size)**2
+    pixArea = (pixel_size)**2
     
     # Create meshgrid of coordinates
     X, Y = np.meshgrid(x_coords, y_coords)
@@ -178,8 +187,8 @@ def CAP_2D_multipole(f, mmax, R):
             inDisk = 1.0 * (radial_distances <= r)
             inRing = 1.0 * (radial_distances > r) * (radial_distances <= r1)
             inRing *= np.sum(inDisk) / np.sum(inRing)
-            CAP_vals_cos[i] = float(np.sum((inDisk - inRing) * cosmphi))
-            CAP_vals_sin[i] = float(np.sum((inDisk - inRing) * sinmphi))
+            CAP_vals_cos[i] = float(np.sum((inDisk - inRing) * cosmphi * pixArea))
+            CAP_vals_sin[i] = float(np.sum((inDisk - inRing) * sinmphi * pixArea))
         capcos_per_m.append(CAP_vals_cos)
         capsin_per_m.append(CAP_vals_sin)
     return r_vals, np.array(capcos_per_m), np.array(capsin_per_m)
