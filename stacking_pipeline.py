@@ -15,9 +15,18 @@ import glob
 import filecmp
 import matplotlib.pyplot as plt
 from astropy.coordinates import SkyCoord
-import time
 
-start = time.time()
+# computing the distance to the nearest edge of the map 
+def dist_to_nearest_edge(dec_rad, ra_rad, dec_min_map,dec_max_map,ra_min_map,ra_max_map):
+    """Minimum angular distance [rad] from (dec, ra) to the map boundary."""
+    cos_dec = np.cos(dec_rad)
+    return np.minimum.reduce([
+        dec_max_map - dec_rad,          # to north edge
+        dec_rad   - dec_min_map,        # to south edge
+        cos_dec * (ra_max_map - ra_rad),  # to east edge
+        cos_dec * (ra_rad - ra_min_map),  # to west edge
+    ])
+
 # Load config
 if len(sys.argv) != 2:
     raise ValueError("Please provide a config yaml file as an argument.")
@@ -25,7 +34,7 @@ config_file_path = sys.argv[1]
 print(f"Loading config from {config_file_path}")
 with open(config_file_path, "r") as f:
     cfg = yaml.safe_load(f)
-
+print(cfg["mpi"])
 use_mpi = cfg["mpi"]["use_mpi"]
 if use_mpi:
     from mpi4py import MPI
@@ -56,6 +65,7 @@ else:
     nreg = 1
     assert size == 1, "MPI size must be 1 when errors are disabled."
 
+constraint_str = cfg["catalog"]["constraint_str"]
 orient = cfg["analysis"]["orient"]
 cutout_rad = cfg["analysis"]["cutout_rad_mpc"] * u.Mpc
 dz_rescale = cfg["analysis"]["dz_rescale"]
@@ -67,8 +77,10 @@ if zmin in ["None","none",None, ""]:
 if zmax in ["None","none",None, ""]:
     zmax = None
 basepath = cfg["paths"]["basepath"]
-orientfile = cfg["paths"]["orient_file"]
+stack_pts_path = cfg["paths"]["stack_pts_path"]
+stack_pts_file = f"{constraint_str}" if f"{constraint_str}".endswith(".csv") else f"{constraint_str}.csv"
 savepath = os.path.join(basepath, newdir_name)
+
 
 # have rank 0 make the new directory, all others wait
 if rank == 0:
@@ -85,16 +97,32 @@ if use_mpi and size > 1:
 
 maps = cfg["maps"]
 
+# Reading the geometry of the bigger map to keep for later
+shape,wcs=enmap.read_fits_geometry(maps[map1][path], hdu=None, quick=True)
+box = enmap.box(shape, wcs)   # shape (2,2): [[dec_min,ra_min],[dec_max,ra_max]] in radians
+
+dec_min_big, ra_min_big = np.degrees(box[0])
+dec_max_big, ra_max_big = np.degrees(box[1])
+print(f"RA range of larger map: {ra_min_big:.2f} to {ra_max_big:.2f} deg")
+print(f"Dec range of larger map: {dec_min_big:.2f} to {dec_max_big:.2f} deg")
+min_safe_dist_bigmap = 50*np.degrees(enmap.pixsize(shape,wcs)*180/np.pi) #arbitrary number of pixels 
+print(f"Pixel size:  = {np.degrees(enmap.pixsize(shape,wcs)*180/np.pi):.6f} deg")
+print(f"Minimum safe distance from edge of larger map: {min_safe_dist_bigmap:.6f} deg")
+
+
+stkpts_str = Path(stack_pts_file).stem
+
 
 # add some function here to check if each map is an enmap, and convert from healpix to enmap otherwise
 
 # read the orientation information
 
+orientfile = stack_pts_path + stack_pts_file
 
 if rank == 0:
     # if not already there, save a copy of the orient file in the new directory for bookkeeping
-    if not os.path.exists(savepath + os.path.basename(orientfile)):
-        shutil.copy(orientfile, savepath + os.path.basename(orientfile))
+    if not os.path.exists(savepath + stack_pts_file):
+        shutil.copy(orientfile, savepath + stack_pts_file)
     # if no yaml file is in the new directory yet, save a copy of the config file for bookkeeping
     yamls = glob.glob(savepath + "/*.yaml")
     assert len(yamls) <= 1, (
@@ -105,13 +133,14 @@ if rank == 0:
             f"YAML file {yamls[0]} does not match the config file used for this run: {config_file_path}. Delete the old yaml file or set a different newdir_name."
         )
     if yamls == []:
-        shutil.copy(config_file_path, savepath + "/stacking_config_used.yaml")
+        shutil.copy(config_file_path, savepath + "/config_used.yaml")
 
 if rank==0:
     # read the catalog
     cat = catalog.Catalog(
         name="standard",
-        pathInCatalog=orientfile,
+        nameLong=constraint_str,
+        pathInCatalog=stack_pts_path + stack_pts_file,
         nObj=nObj,
     )
     print("Analyzing catalog of length", len(cat.Z))
@@ -125,21 +154,16 @@ elif rank > 0:
     
 if zmin is None:
     zmin = np.amin(cat.Z)
-    print(f"zmin not provided. Using minimum redshift in catalog: {zmin:.3f}")
 if zmax is None:
     zmax = np.amax(cat.Z)
-# make sure the redshift range is reasonable
-assert zmin < zmax, f"zmin ({zmin}) must be less than zmax ({zmax})."
-assert zmin > 0, f"zmin ({zmin}) must be greater than 0."
-assert zmax < 2, f"zmax ({zmax}) must be less than 2."
 print(f"Redshift range to stack: {zmin:.3f} - {zmax:.3f}")
 
 if len(maps) == 1:
     outfile = (
-        f"{savepath}/{maps['map1']['shortname']}_consol_stacks_z{zmin:.2f}_{zmax:.2f}_{Path(orientfile).stem}{teststr}.h5"
+        f"{savepath}/{maps['map1']['shortname']}_consol_stacks_z{zmin:.2f}_{zmax:.2f}_{stkpts_str}{teststr}.h5"
     )
 else:
-    raise NotImplementedError("Currently only supports one map. Please add functionality to handle multiple maps if needed.")
+    print("Not yet implemented.")
 
 # Make sure the output file doesn't already exist
 if rank == 0:
@@ -188,7 +212,7 @@ else:
 # if the unit of cutout_rad is Mpc, then we need to convert it to degrees
 if cutout_rad.unit == u.Mpc:
     # find out the stack geometry based on the redshift where the cutout size is largest in angular units
-    z_array = np.linspace(zmin, zmax, int((zmax - zmin) / dz_rescale) + 1)
+    z_array = np.linspace(zmin, zmax, int((zmax - zmin) / dz_rescale))
     angular_size_z = cosmo.arcsec_per_kpc_comoving(z_array).to(u.arcmin / u.Mpc) * cutout_rad
     z_largest_cutout = z_array[np.argmax(angular_size_z)]
     print("Cutout size is largest at z =", z_largest_cutout)
@@ -226,13 +250,12 @@ else:
 ### end setup multiprocessing ###
 
 
-end = time.time()
-print("Whole setup took", end - start, "seconds.")
 
 # Prepare to save to an HDF5 file
-file_i = f"{savepath}/stacks_{Path(orientfile).stem}_{rank}{teststr}.h5"
+file_i = f"{savepath}/stacks_{stkpts_str}_{rank}{teststr}.h5"
 if not os.path.exists(file_i):
-    with h5py.File(file_i, "w") as f:
+    with h5py.File(f"{savepath}/stacks_{stkpts_str}_{rank}{teststr}.h5", "w") as f:
+        
         f.attrs["cutout_rad_deg"] = cutout_rad_deg.value
         f.attrs["cutout_rad_cMpc"] = cutout_rad_deg * Mpc_per_deg_comov_base.value
         f.attrs["cutout_rad_pMpc"] = cutout_rad_deg * Mpc_per_deg_phys_base.value
@@ -246,13 +269,12 @@ if not os.path.exists(file_i):
             sn = maps[m]["shortname"]
             map_group = f.create_group(sn)
             map_group.attrs["map_path"] = mappath
-            print(f"Handling input map: {mappath}")
+            print(f"Reading map {mappath}")
             if size==1:
-                readmap_start = time.time()
                 # read the whole map
                 imap = enmap.read_map(maps[m]["path"])
-                readmap_end = time.time()
-                print(f"Read map in {readmap_end - readmap_start:.1f} seconds.")
+                min_safe_dist_imap = cutout_rad_deg.value * np.sqrt(2) # RH added for distance check
+
             for i in range(nruns_local + extras):
                 n = rank * nruns_local + i
                 in_reg = cat.labels == n
@@ -293,8 +315,8 @@ if not os.path.exists(file_i):
                     imap = enmap.read_map(
                         maps[m]["path"],
                         box=[
-                            [np.radians(lowdec.value), np.radians(highra.value)],
-                            [np.radians(highdec.value), np.radians(lowra.value)],
+                            [np.radians(lowdec.value), np.radians(lowra.value)],
+                            [np.radians(highdec.value), np.radians(highra.value)],
                         ],
                     )
                 # extract all the thumbnails for this region
@@ -305,22 +327,39 @@ if not os.path.exists(file_i):
                 dec_inreg = cat.DEC[in_reg]
                 z_inreg = cat.Z[in_reg]
 
+                ## Distance computed
+                dist_bigmap = dist_to_nearest_edge(np.radians(dec_inreg), np.radians(ra_inreg), np.radians(dec_min_big), np.radians(dec_max_big), np.radians(ra_min_big), np.radians(ra_max_big))
+                dist_imap = dist_to_nearest_edge(np.radians(dec_inreg), np.radians(ra_inreg), np.radians(lowdec.value), np.radians(highdec.value), np.radians(lowra.value), np.radians(highra.value))
+                
+                if np.any(dist_bigmap < min_safe_dist_bigmap):
+                    print(f"Warning: Region {n} has points within {min_safe_dist_bigmap:.6f} deg of the edge of the larger map. ")
+
                 diff_lowra_inreg= (ra_inreg - lowra.value)
                 diff_highra_inreg = (highra.value-ra_inreg )
                 diff_lowdec_inreg= (dec_inreg - lowdec.value)
                 diff_highdec_inreg = (highdec.value-dec_inreg)
 
                 if test:
-                    plt.hist(diff_lowra_inreg, bins=50, alpha=0.5, label="diff_lowra")
-                    plt.hist(diff_highra_inreg, bins=50, alpha=0.5, label="diff_highra")
-                    plt.legend()
-                    plt.savefig(f"{savepath}/region_{n}_ra_diffs.png")
-                    plt.clf()
-                    plt.hist(diff_lowdec_inreg, bins=50, alpha=0.5, label="diff_lowdec")
-                    plt.hist(diff_highdec_inreg, bins=50, alpha=0.5, label="diff_highdec")
-                    plt.legend()
-                    plt.savefig(f"{savepath}/region_{n}_dec_diffs.png")
-                    plt.clf()
+                    plt.hist(dist_imap, bins=6, color="steelblue",
+                            edgecolor="white", linewidth=0.6, alpha=0.85)
+                    plt.savefig(f"{savepath}/region_{n}_bigmap_diffs.png")
+                    plt.hist(dist_bigmap, bins=6, color="gray",
+                            edgecolor="white", linewidth=0.6, alpha=0.85)
+                    plt.savefig(f"{savepath}/region_{n}_local_diffs.png")
+
+                    # plt.hist(diff_lowra_inreg, bins=50, alpha=0.5, label="diff_lowra")
+                    # plt.hist(diff_highra_inreg, bins=50, alpha=0.5, label="diff_highra")
+                    # plt.legend()
+                    # plt.savefig(f"{savepath}/region_{n}_ra_diffs.png")
+                    # plt.clf()
+                    # plt.hist(diff_lowdec_inreg, bins=50, alpha=0.5, label="diff_lowdec")
+                    # plt.hist(diff_highdec_inreg, bins=50, alpha=0.5, label="diff_highdec")
+                    # plt.legend()
+                    # plt.savefig(f"{savepath}/region_{n}_dec_diffs.png")
+                    # plt.clf()
+
+                # RH: actually do the kicking out of point before the z loop
+                #  so that you don't have to modify things post facto
 
                 chunkObj_reg = Chunk(
                         ra_inreg,
@@ -329,20 +368,16 @@ if not os.path.exists(file_i):
                         x_asym_inreg,
                         y_asym_inreg
                     )
-                thumbs_time = time.time()
                 thumbs = extractThumbnails(
                     chunkObj_reg,
                     geom,
                     imap,
                     orient
                 )
-                thumbs_time_end = time.time()
-                print(f"Extracted thumbnails for region {n} in {thumbs_time_end - thumbs_time:.1f} seconds.")
                 
-                stacking_start = time.time()
-                
-                for i in range(len(z_array)-1): # iterate through small z bins
-                    z = z_array[i] # just use the lower z of this slice
+                for z in np.linspace(
+                    zmin, zmax, int((zmax - zmin) / dz_rescale)
+                ):  # iterate through small z bins
                     Mpc_per_deg_phys_z = cosmo.kpc_proper_per_arcmin(z).to(
                         u.Mpc / u.degree
                     )
@@ -351,8 +386,8 @@ if not os.path.exists(file_i):
                     )
                     phys_rescale_factor = Mpc_per_deg_phys_base / Mpc_per_deg_phys_z
                     comov_rescale_factor = Mpc_per_deg_comov_base / Mpc_per_deg_comov_z
-                    inz = (cat.Z[in_reg] < (z_array[i+1])) & (cat.Z[in_reg] > (z_array[i]))
-                    z_rescale_str = f"z_{z_array[i]:.2f}_{z_array[i+1]:.2f}"
+                    inz = (cat.Z[in_reg] < (z + dz_rescale)) & (cat.Z[in_reg] > (z - dz_rescale))
+                    z_rescale_str = f"z_{(z - dz_rescale):.2f}_{(z + dz_rescale):.2f}"
                     z_group = reg_group.create_group(z_rescale_str)  # create a subgroup
                     
                     # make the ChunkObj for these z
@@ -406,8 +441,13 @@ if not os.path.exists(file_i):
                     z_group.create_dataset("z", data=z_inreg[inz])
                     nobj_regn += chunkObj.nObj
                 reg_group.attrs["Nobj"] = nobj_regn
-                stacking_end = time.time()
-                print(f"Finished stacking region {n} in {stacking_end - stacking_start:.1f} seconds.")
+                reg_group_diffs.attrs["Nobj"] = nobj_regn
+                reg_group_diffs.create_dataset("diff_lowra", data=diff_lowra_inreg)
+                reg_group_diffs.create_dataset("diff_highra", data=diff_highra_inreg)
+                reg_group_diffs.create_dataset("diff_lowdec", data=diff_lowdec_inreg)
+                reg_group_diffs.create_dataset("diff_highdec", data=diff_highdec_inreg)
+
+                
 else:
     assert restart_run, (
         f"File {file_i} already exists. If you want to retry consolidating the files, set restart_run=True."
@@ -421,7 +461,7 @@ if use_mpi and size > 1:
         print("Consolidating stacks to", outfile)
 
         with h5py.File(outfile, "w") as consol_f:
-            files = glob.glob(f"{savepath}/stacks_{Path(orientfile).stem}*{teststr}.h5")
+            files = glob.glob(f"{savepath}/stacks_{stkpts_str}*{teststr}.h5")
             for m in maps:
                 mappath = maps[m]["path"]
                 sn = maps[m]["shortname"]
@@ -448,5 +488,5 @@ if use_mpi and size > 1:
                 os.remove(file)
         print(f"Saved to {outfile}")
 else:
-    os.rename(f"{savepath}/stacks_{Path(orientfile).stem}_{rank}{teststr}.h5", outfile)
+    os.rename(f"{savepath}/stacks_{stkpts_str}_{rank}{teststr}.h5", outfile)
     print(f"Saved to {outfile}")
