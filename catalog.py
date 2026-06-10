@@ -39,10 +39,12 @@ class Catalog(object):
             self.RA = data['RA'][sel].to_numpy() # [deg]
             self.DEC = data['DEC'][sel].to_numpy()  # [deg]
             self.Z = data['Z'][sel].to_numpy()
+            
             self.alpha = None
             self.x_asym = None
             self.y_asym = None
             self.constraints = None
+            
             # the following parameters are optional; only read if they exist in the catalog
             if 'alpha' in data:
                 self.alpha = data['alpha'][sel].to_numpy() # cos(alpha)
@@ -52,6 +54,10 @@ class Catalog(object):
                 self.y_asym = data['y_asym'][sel].to_numpy() # 1 or -1
             if 'constraints' in data:
                 self.constraints = data['constraints'][sel].to_numpy()
+            if 'nu' in data:
+                self.nu = data['nu'][sel].to_numpy()
+            if 'e' in data:
+                self.e  = data['e'][sel].to_numpy()
             self.hdr = header
             
 

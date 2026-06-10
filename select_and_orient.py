@@ -152,49 +152,41 @@ def overdensity_to_potential(overdensity_map_alms, nside):
     potential_map  = hp.sphtfunc.alm2map(potential_alms, nside) # rewrite inmap as potential map
     return potential_alms, potential_map
 
-    
-def tidal_field(alms, nside, cotth, return_grads=True):
-    npix = hp.nside2npix(nside)
-    
-    # first derivative (dphi/dtheta and dphi/sin(theta)dphi)
-    dphitheta_map, dphisphi_map = hp.alm2map_der1(alms, nside)[-2:]
 
-    # turn into alms again (no direct function maybe because numerical)
-    dphitheta = hp.sphtfunc.map2alm(dphitheta_map, pol=False)
-    dphisphi = hp.sphtfunc.map2alm(dphisphi_map, pol=False)
-
-    # t11 is derivative with respect to theta twice (dphithetatheta)
-    t11, dphisphitheta = hp.alm2map_der1(dphitheta, nside)[-2:]
-
-    # t21 is derivative with respect to phi and then theta
-    t21, dphisphisphi = hp.alm2map_der1(dphisphi, nside)[-2:]
-    t12 = t21[:]
-    
-    # t22 is a mixture of stuff
-    dphitheta = hp.sphtfunc.alm2map(dphitheta, nside)
-    t22 = cotth*dphitheta + dphisphisphi
-    if not return_grads:
-        del dphisphitheta, dphisphisphi, dphitheta, dphisphi, cotth
-    else: del dphisphitheta, dphisphisphi, cotth
-    gc.collect()
-    
-    # to be used as a sanity check
-    delta = t22 + t11
-
-    # creating the tidal tensor
-    tidal = np.zeros((npix, 2, 2))
-    tidal[:, 0, 0] = t11
-    tidal[:, 0, 1] = t12
-    tidal[:, 1, 0] = t21
-    tidal[:, 1, 1] = t22
-    del t11, t12, t21, t22
-    gc.collect()
-    if return_grads:
-        return tidal, dphitheta_map, dphisphi_map
+def get_QU(alms, nside, compute_T=False):
+    lmax = hp.Alm.getlmax(len(alms))
+    # ell corresponding to every alm coefficient
+    ell = hp.Alm.getlm(lmax)[0]
+     # copy so we don't modify the input
+    almE = alms.copy()
+    almE *= ell * (ell + 1)
+    almB = np.zeros_like(almE) # purely E-mode
+    # spin-2 synthesis
+    Q, U = hp.alm2map_spin([almE, almB], nside, spin=2, lmax=lmax)
+    if compute_T:
+        T = hp.alm2map(almE, nside, lmax=lmax)
     else:
-        return tidal
+        T = None
+    return Q, U, T
 
-def measure_orientation(ra, dec, overdensity_map, cotth, e_min=None, e_max=None, nu_min=None, mode='density', return_xy_pol=True, mask=None):
+def get_sym(alms, nside):
+    lmax = hp.Alm.getlmax(len(alms))
+    # ell corresponding to every alm coefficient
+    ell = hp.Alm.getlm(lmax)[0]
+     # copy so we don't modify the input
+    alm1 = alms.copy()
+    alm1 *= (ell * (ell + 1))**(-0.5)
+    alm2 = np.zeros_like(alm1) # purely E-mode
+    
+    Vtheta, Vphi = hp.alm2map_spin(
+    [alm1, alm2],
+    nside,
+    spin=1,
+    lmax=lmax
+    )
+    return Vtheta, Vphi
+    
+def measure_orientation_QU(ra, dec, overdensity_map, cotth, mode='density', compute_xy_pol=True, mask=None):
     # standard check: ensure zero mean
     if mask is None:
         assert np.abs(np.mean(overdensity_map)) < .1, "The input map does not have zero mean."
@@ -210,65 +202,165 @@ def measure_orientation(ra, dec, overdensity_map, cotth, e_min=None, e_max=None,
         alms, inmap = overdensity_to_potential(alms, nside)
     else:
         inmap = overdensity_map
-    if return_xy_pol:
-        tidal, dphitheta, dphisphi = tidal_field(alms, nside, cotth)
+    
+    # compute nu: delta/sigma
+    if mask is None:
+        sigma = np.std(inmap)
     else:
-        tidal = tidal_field(alms, nside, cotth) # tidal is shape pix, 2, 2
-    ### selections ###
-    # find pixel indices for each object
+        sigma = np.std(inmap[mask>0])
+    print("Computed rms of the field: {:.4f}".format(sigma))
     
     pix = hp.ang2pix(nside, ra, dec, lonlat=True)
-    tidal_obj = tidal[pix,:,:] # nobj, 2, 2
-    evals, evecs = np.linalg.eig(tidal_obj) # nobj, 2 (evals), nobj, 2, 2 (evecs)
+    nu = inmap[pix]/sigma
+    
+    # compute Q, U maps
+    Q, U, T = get_QU(alms, nside, compute_T=True)
+    # get angle
+    alpha = 0.5 * np.arctan2(U, Q) # this is defined +pi/2 from what we want
+    
+    # calculate ellipticity, equivalent to lambda1-lambda2/2(lambda1+lambda2) for the Hessian of tidal tensor
+    e = (Q**2 + U**2)/(T**2 + 1e-10) # small value in denominator to avoid blowing up
+    
+    # find pixel indices for each object
+    pix = hp.ang2pix(nside, ra, dec, lonlat=True)
+    x_pol = np.ones(pix.shape[0])
+    y_pol = np.ones(pix.shape[0])
+    if compute_xy_pol:
+        # compute Vtheta, Vphi maps
+        Vtheta, Vphi = get_sym(alms, nside)
+        # measure the gradient along the alpha direction by projecting
+        grad_alpha_x = np.cos(alpha[pix])*Vphi[pix] - np.sin(alpha[pix])*Vtheta[pix]
+        x_pol[grad_alpha_x>0] = -1
+        grad_alpha_y = np.cos(alpha[pix])*Vtheta[pix] + np.sin(alpha[pix])*Vphi[pix]
+        y_pol[grad_alpha_y<0] = -1
+            
+    
+    # if(hmap_sym%map(i, 2)*cos(arr(3))-hmap_sym%map(i,1)*sin(arr(3)) .gt. 0.d0 .and. this%xup)then
+    #         arr(4) = -1.d0
+    #      else
+    #         arr(4) = 1.d0
+    #      endif
+    #      if(hmap_sym%map(i, 1)*cos(arr(3))+hmap_sym%map(i,2)*sin(arr(3)) .lt. 0.d0 .and. this%yup)then
+    #         arr(5)= -1.d0
+    #      else
+    #         arr(5) = 1.d0
+    return alpha[pix], e[pix], nu, x_pol, y_pol
+
+    
+    
+def tidal_field(alms, nside, cotth, return_grads=False):
+    npix = hp.nside2npix(nside)
+    
+    # first derivative of input field F (dF/dtheta and dF/sin(theta)dphi. Healpy takes care of the / sin(theta))
+    dtheta_map, dphi_map = hp.alm2map_der1(alms, nside)[-2:]
+
+    # turn into alms again (no direct function maybe because numerical)
+    dtheta = hp.sphtfunc.map2alm(dtheta_map, pol=False)
+    dphi = hp.sphtfunc.map2alm(dphi_map, pol=False)
+
+    # t11 is derivative with respect to theta twice (dtheta (dF/dphi / sintheta) )
+    t11, dthetadphi = hp.alm2map_der1(dtheta, nside)[-2:]
+    del dthetadphi
+    
+    # t21 is derivative with respect to phi and then theta. dphidphi, again, has /sin(theta) included [so dphi/sin^2theta]
+    t21, dphidphi = hp.alm2map_der1(dphi, nside)[-2:]
+    t12 = t21[:]
+    
+    # t22 is a mixture of stuff
+    
+    t22 = cotth*dtheta_map + dphidphi
+    if return_grads:
+        del dphidphi, cotth, dtheta, dphi
+    else:
+        del dphidphi, cotth, dtheta, dphi, dtheta_map, dphi_map
+    
+    gc.collect()
+    
+    # to be used as a sanity check
+    # delta = t22 + t11
+
+    # creating the tidal tensor
+    tidal = np.zeros((npix, 2, 2))
+    tidal[:, 0, 0] = t11
+    tidal[:, 0, 1] = t12
+    tidal[:, 1, 0] = t21
+    tidal[:, 1, 1] = t22
+    
+    Q = t11 - t22
+    U = 2*t12
+    alpha2 = 0.5*np.arctan2(U, Q)
+    
+    del t11, t12, t21, t22
+    gc.collect()
+    
+    if return_grads:
+        return tidal, dtheta_map, dphi_map, alpha2
+    else:
+        return tidal, alpha2
+
+def measure_orientation(ra, dec, overdensity_map, cotth, mode='density', compute_xy_pol=True, mask=None):
+    # standard check: ensure zero mean
+    if mask is None:
+        assert np.abs(np.mean(overdensity_map)) < .1, "The input map does not have zero mean."
+    else:
+        # make sure mask is binary
+        assert np.all((mask==0) | (mask==1)), "Mask should be binary (0 or 1)."
+        assert np.abs(np.mean(overdensity_map[mask>0])) < .1, "The input map does not have zero mean within the mask."
+
+    nside = hp.get_nside(overdensity_map)
+    alms  = hp.sphtfunc.map2alm(overdensity_map, pol=False)
+    
+    if mode=='potential': # convert the density to a potential field
+        alms, inmap = overdensity_to_potential(alms, nside)
+    else:
+        inmap = overdensity_map
+    if compute_xy_pol:
+        tidal, dtheta, dphi, alpha2 = tidal_field(alms, nside, cotth, return_grads=True) # tidal is shape pix, 2, 2
+        gradF = np.column_stack((dtheta, dphi)) # shape pix, 2
+        del dtheta, dphi
+        gc.collect()
+    else:
+        tidal, alpha2 = tidal_field(alms, nside, cotth) # tidal is shape pix, 2, 2
+        
+    ### compute environmental properties ###
+    # find pixel indices for each object
+    Ntot = len(ra)
+    pix = hp.ang2pix(nside, ra, dec, lonlat=True)
+    tidal = tidal[pix,:,:] # nobj, 2, 2
+    if compute_xy_pol:
+        gradF = gradF[pix,:]
+    alpha2 = alpha2[pix]
+    evals, evecs = np.linalg.eigh(tidal) # nobj, 2 (evals), nobj, 2, 2 (evecs)
     evals *= -1 # reverse sign so that peaks are positive. Note: different than Boryana's implementation
     i_sort = np.argsort(evals, axis=1) # same shape as evals
-    if e_min is not None or e_max is not None:
-        # compute ellipticity for the objects: lambda1-lambda2/2(lambda1+lambda2)
-        eigs_larger = np.take_along_axis(evals,i_sort, axis=1)[:,1]
-        eigs_smaller = np.take_along_axis(evals,i_sort, axis=1)[:,0]
-        e = (eigs_larger-eigs_smaller)/(2*(eigs_larger+eigs_smaller)+5e-8)
-        if e_min is not None:
-            ecut_min = e > e_min
-        else:
-            ecut_min = np.ones(len(e), dtype=bool)
-        if e_max is not None:
-            ecut_max = e < e_max
-        else:
-            ecut_max = np.ones(len(e), dtype=bool)
-    if e_min is None and e_max is None:
-        ecut_min = np.ones(len(evals), dtype=bool)
-        ecut_max = np.ones(len(evals), dtype=bool)
-    if nu_min is not None:
-        # compute nu: delta/sigma
-        if mask is None:
-            sigma = np.std(inmap)
-        else:
-            sigma = np.std(inmap[mask>0])
-        print("Computed rms of the field: {:.4f}".format(sigma))
-        nu_obj = inmap[pix]/sigma
-        nucut_min = nu_obj > nu_min
-    else:
-        nucut_min = np.ones(len(evals), dtype=bool)
-    # combine the boolean cuts
-    final_cut = ecut_min & ecut_max & nucut_min
+
+    # compute ellipticity for the objects: lambda1-lambda2/2(lambda1+lambda2)
+    eigs_larger = np.take_along_axis(evals,i_sort, axis=1)[:,1]
+    eigs_smaller = np.take_along_axis(evals,i_sort, axis=1)[:,0]
+    e = (eigs_larger-eigs_smaller)/(2*(eigs_larger+eigs_smaller)+5e-8) # small value in denominator to avoid blowing up
     
-    ### selections ###
+    # compute nu: delta/sigma
+    if mask is None:
+        sigma = np.std(inmap)
+    else:
+        sigma = np.std(inmap[mask>0])
+    print("Computed rms of the field: {:.4f}".format(sigma))
+    nu = inmap[pix]/sigma
+    
+    ### compute environmental properties ###
     
     ### orientation ###
 
-    evals_sorted = np.zeros((np.sum(final_cut), 2))
-    evecs_sorted = np.zeros((np.sum(final_cut), 2, 2))
-    evals_sel = evals[final_cut]
-    evecs_sel = evecs[final_cut]
-    i_sort_sel = i_sort[final_cut]
-    for i in range(evals_sel.shape[0]):
-        evecs_sorted[i, :, 0] = evecs_sel[i, :, i_sort_sel[i, 0]]
-        evecs_sorted[i, :, 1] = evecs_sel[i, :, i_sort_sel[i, 1]]
-        evals_sorted[i, 0] = evals_sel[i, i_sort_sel[i, 0]]
-        evals_sorted[i, 1] = evals_sel[i, i_sort_sel[i, 1]]
-    del i_sort, i_sort_sel
+    evals_sorted = np.zeros((Ntot, 2))
+    evecs_sorted = np.zeros((Ntot, 2, 2))
+    for i in range(Ntot):
+        evecs_sorted[i, :, 0] = evecs[i, :, i_sort[i, 0]]
+        evecs_sorted[i, :, 1] = evecs[i, :, i_sort[i, 1]]
+        evals_sorted[i, 0] = evals[i, i_sort[i, 0]]
+        evals_sorted[i, 1] = evals[i, i_sort[i, 1]]
+    del i_sort
     gc.collect()
-    del evals, evecs, evals_sel, evecs_sel
+    del evals, evecs
     gc.collect()
     evals, evecs = evals_sorted, evecs_sorted
     e_th = np.array([1., 0.]) # A e_theta unit vector
@@ -281,18 +373,19 @@ def measure_orientation(ra, dec, overdensity_map, cotth, e_min=None, e_max=None,
     
     for i in range(evals.shape[0]):
         e2 = evecs[i, :, 1] # B smallest eigenvector
+        e1 = evecs[i, :, 0] # A largest eigenvector
         # assert np.isclose(np.linalg.norm(e2), 1.)
         ca[i] = np.dot(e_th, e2)
         sa[i] = np.cross(e_th, e2) # applying ca, -sa, sa, ca to A gives 1 in the dot product with B for any A, B
         alpha[i] = np.arctan2(sa[i], ca[i])
-        if return_xy_pol:
-            # measure the gradient along the e2 direction and make sure it's positive (i.e. e2 points "uphill")
-            grad_e2 = e2[0]*dphitheta[pix[final_cut][i]] + e2[1]*dphisphi[pix[final_cut][i]]
+        if compute_xy_pol:
+            # measure the gradient along the e2 direction (long-axis) by projecting
+            grad_e2 = np.dot(gradF[i], e2)
+            # measure the gradient along the e1 direction (short-axis)
+            grad_e1 = np.dot(gradF[i], e1)
             if grad_e2<0:
                 x_pol[i] = -1
-            e1 = evecs[i, :, 1]
-            grad_e1 = e1[0]*dphitheta[pix[final_cut][i]] + e1[1]*dphisphi[pix[final_cut][i]]
             if grad_e1<0:
                 y_pol[i] = -1
     
-    return alpha, x_pol.astype(np.int32), y_pol.astype(np.int32), ca, sa, final_cut
+    return alpha, alpha2, x_pol.astype(np.int32), y_pol.astype(np.int32), ca, sa, e, nu, evecs
