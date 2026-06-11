@@ -175,7 +175,8 @@ def get_sym(alms, nside):
     ell = hp.Alm.getlm(lmax)[0]
      # copy so we don't modify the input
     alm1 = alms.copy()
-    alm1 *= (ell * (ell + 1))**(-0.5)
+    alm1[1:] *= (ell[1:] * (ell[1:] + 1))**(-0.5) # avoid divide by zero for the monopole
+    alm1[0] = 0.
     alm2 = np.zeros_like(alm1) # purely E-mode
     
     Vtheta, Vphi = hp.alm2map_spin(
@@ -186,7 +187,7 @@ def get_sym(alms, nside):
     )
     return Vtheta, Vphi
     
-def measure_orientation_QU(ra, dec, overdensity_map, cotth, mode='density', compute_xy_pol=True, mask=None):
+def measure_orientation_QU(ra, dec, overdensity_map, mode='density', compute_xy_pol=True, mask=None):
     # standard check: ensure zero mean
     if mask is None:
         assert np.abs(np.mean(overdensity_map)) < .1, "The input map does not have zero mean."
@@ -233,7 +234,10 @@ def measure_orientation_QU(ra, dec, overdensity_map, cotth, mode='density', comp
         x_pol[grad_alpha_x>0] = -1
         grad_alpha_y = np.cos(alpha[pix])*Vtheta[pix] + np.sin(alpha[pix])*Vphi[pix]
         y_pol[grad_alpha_y<0] = -1
-            
+        import matplotlib.pyplot as plt
+        plt.hist(grad_alpha_x, bins=100)
+        plt.figure()
+        plt.hist(grad_alpha_y, bins=100)
     
     # if(hmap_sym%map(i, 2)*cos(arr(3))-hmap_sym%map(i,1)*sin(arr(3)) .gt. 0.d0 .and. this%xup)then
     #         arr(4) = -1.d0

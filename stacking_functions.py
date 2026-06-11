@@ -238,17 +238,23 @@ def stackChunk(
                 sys.exit("angledef must be one of 'CCofRA' or 'CofDec'.")
             stamp = thumbs[iObj]
             
-            if orient in ["asym_x", "asym_xy"]:
-                if iChunk.x_asym[iObj] == -1:
-                    stamp = np.fliplr(stamp)
-
-            if orient in ["asym_y", "asym_xy"]:
-                if iChunk.y_asym[iObj] == -1:
-                    stamp = np.flipud(stamp)
             fun2D = RectBivariateSpline(x_lrg, y_lrg, stamp, kx=1, ky=1)
             X_rot, Y_rot = np.dot(R, XY)
             stampMap = fun2D(X_rot, Y_rot, grid=False).reshape(resMap.shape)
-            
+            # plt.imshow(stampMap)
+            # print('x asym', iChunk.x_asym[iObj], 'y asym', iChunk.y_asym[iObj])
+            # plt.show()
+            # if iObj > 10:
+            #     break
+            if orient in ["asym_x", "asym_xy"]:
+                if iChunk.x_asym[iObj] == 1:
+                    stampMap = np.fliplr(stampMap)
+
+            if orient in ["asym_y", "asym_xy"]:
+                if iChunk.y_asym[iObj] == 1:
+                    stampMap = np.flipud(stampMap)
+            # plt.imshow(stampMap)
+            # plt.show()
             del X_rot, Y_rot
             resMap += stampMap
 

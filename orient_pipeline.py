@@ -265,8 +265,6 @@ if size>1:
 alpha_all = []
 xpol_all = []
 ypol_all = []
-ca_all = []
-sa_all = []
 ra_all = []
 dec_all = []
 z_all = []
@@ -368,13 +366,10 @@ for i in range(len(zlist_tot)):
     else:
         compute_xy_pol = False
     print("Getting orientations.")
-    alpha, x_pol, y_pol, ca, sa, e, nu = sao.measure_orientation(ra_so_bin, dec_so_bin, odmap, cotth, mode='density', compute_xy_pol=compute_xy_pol, mask=mask)
-    
+    alpha, e, nu, x_pol, y_pol = sao.measure_orientation_QU(ra_so_bin, dec_so_bin, odmap, mode='density', compute_xy_pol=True, mask=mask)
     alpha_all.extend(alpha)
     xpol_all.extend(x_pol)
     ypol_all.extend(y_pol)
-    ca_all.extend(ca)
-    sa_all.extend(sa)
     ra_all.extend(ra_so_bin)
     dec_all.extend(dec_so_bin)
     z_all.extend(z_so_bin)
@@ -391,8 +386,6 @@ print(f"Total time for processing zbins was {tot_time:.0f} seconds, or {(tot_tim
 alpha_all = np.asarray(alpha_all)
 xpol_all = np.asarray(xpol_all)
 ypol_all = np.asarray(ypol_all)
-ca_all = np.asarray(ca_all)
-sa_all = np.asarray(sa_all)
 ra_all = np.asarray(ra_all)
 dec_all = np.asarray(dec_all)
 z_all = np.asarray(z_all)
