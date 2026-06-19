@@ -227,7 +227,7 @@ def stackChunk(
                 ca = np.cos(iChunk.alpha[iObj])
                 sa = np.sin(iChunk.alpha[iObj])
             
-            fun2D = RectBivariateSpline(x_lrg, y_lrg, thumbs[iObj], kx=1, ky=1)
+            
             if angledef == "CCofRA":
                 R = np.array([[ca, sa], [-sa, ca]]) # Boryana's version (orientations defined wrt RA axis, I think)
             elif angledef == "CofDec":
@@ -236,16 +236,25 @@ def stackChunk(
                 )  # COOP version (orientations defined wrt Dec axis, but clockwise, I think)
             else:
                 sys.exit("angledef must be one of 'CCofRA' or 'CofDec'.")
+            stamp = thumbs[iObj]
             
+            fun2D = RectBivariateSpline(x_lrg, y_lrg, stamp, kx=1, ky=1)
             X_rot, Y_rot = np.dot(R, XY)
             stampMap = fun2D(X_rot, Y_rot, grid=False).reshape(resMap.shape)
-            if (orient == "asym_x") or (orient == "asym_xy"):
-                # add asymmetry
+            # plt.imshow(stampMap)
+            # print('x asym', iChunk.x_asym[iObj], 'y asym', iChunk.y_asym[iObj])
+            # plt.show()
+            # if iObj > 10:
+            #     break
+            if orient in ["asym_x", "asym_xy"]:
                 if iChunk.x_asym[iObj] == 1:
                     stampMap = np.fliplr(stampMap)
-            if (orient == "asym_y") or (orient == "asym_xy"):
+
+            if orient in ["asym_y", "asym_xy"]:
                 if iChunk.y_asym[iObj] == 1:
                     stampMap = np.flipud(stampMap)
+            # plt.imshow(stampMap)
+            # plt.show()
             del X_rot, Y_rot
             resMap += stampMap
 

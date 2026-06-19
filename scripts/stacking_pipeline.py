@@ -1,8 +1,10 @@
 import sys
+# insert path 1 level up
+sys.path.insert(0, "/global/cfs/cdirs/act/data/mlokken/oriented_stacks/oriented_superclustering/")
 import numpy as np
 from astropy.cosmology import Planck18 as cosmo
 import astropy.units as u
-from pixell import enmap
+from pixell import enmap, reproject, utils
 import catalog
 from kmeans_radec import kmeans_sample
 from stacking_functions import Chunk, stackChunk, StackGeometry, extractThumbnails
@@ -37,6 +39,9 @@ if use_mpi:
 else:
     rank = 0
     size = 1
+
+comm.Barrier()
+print("rank", rank, "passed barrier")
 
 restart_run = cfg["run"]["restart_run"]
 newdir_name = cfg["run"]["newdir_name"]
@@ -86,11 +91,51 @@ if use_mpi and size > 1:
 maps = cfg["maps"]
 
 
-# add some function here to check if each map is an enmap, and convert from healpix to enmap otherwise
+# check if each map is an enmap, and convert from healpix to enmap otherwise
+# does another map exist with _enmap in the same directory?
+if rank == 0:
+    for m in maps:
+        mappath = maps[m]["path"]
+        if not os.path.exists(mappath):
+            raise ValueError(f"Map path {mappath} does not exist.")
+        try:
+            shape, wcs = enmap.read_map_geometry(mappath) # quick geometry check which will fail if not an enmap
+            print(f"Map {m} is already an enmap.")
+        except Exception as e:
+            print(f"Map {m} is not an enmap. Attempting to convert from healpix.")
+            enmap_path = mappath.replace(".fits", "_enmap.fits")
+            if os.path.exists(enmap_path):
+                print(f"Enmap version of {m} already exists at {enmap_path}. Using that.")
+                maps[m]["path"] = enmap_path
+            else:
+                import healpy as hp
+                # get the nside without loading the full healpix map
+                
+                hpmap = hp.read_map(mappath)
+                print(f"Reprojecting healpix map {m} to enmap. This may take a while...")
+                shape,wcs = enmap.fullsky_geometry(res=1 * utils.arcmin,proj='car') # 1 arcmin pixels
+                enmap_rp = reproject.healpix2map(hpmap, shape=shape, wcs=wcs, method='spline')
+                enmap.write_map(enmap_path, enmap_rp)
+                print(f"Saved enmap version of {m} to {enmap_path}.")
+            maps[m]["path"] = enmap_path
 
+if size > 1:
+    # make sure the mappaths are consistent in case they got changed in the previous step
+    if rank==0:
+        paths = {m: maps[m]["path"] for m in maps}
+    else:
+        paths = None
+    paths = comm.bcast(paths, root=0)
+    for m in maps:
+        maps[m]["path"] = paths[m]
+
+# make sure mappath updated
+for m in maps:
+    mappath = maps[m]["path"]
+    print("mappath now", mappath)
+    if not os.path.exists(mappath):
+        raise ValueError(f"Map path {mappath} does not exist.")
 # read the orientation information
-
-
 if rank == 0:
     # if not already there, save a copy of the orient file in the new directory for bookkeeping
     if not os.path.exists(savepath + os.path.basename(orientfile)):
@@ -107,22 +152,14 @@ if rank == 0:
     if yamls == []:
         shutil.copy(config_file_path, savepath + "/stacking_config_used.yaml")
 
-if rank==0:
-    # read the catalog
-    cat = catalog.Catalog(
-        name="standard",
-        pathInCatalog=orientfile,
-        nObj=nObj,
-    )
-    print("Analyzing catalog of length", len(cat.Z))
-    if size > 1:
-            for i in range(1, size):
-                comm.send(cat, dest=i)
-                print(f"sending catalog to rank {i}")
-elif rank > 0:
-    cat = comm.recv(source=0)
-    print(f"received catalog on rank {rank} of length", len(cat.Z))
-    
+
+# every rank reads -- initially had this different but finding issues with broadcasting object on NERSC
+cat = catalog.Catalog(
+    name="standard",
+    pathInCatalog=orientfile,
+    nObj=nObj,
+)
+print(f"Rank {rank} read the catalog with {len(cat.Z)} objects.")
 if zmin is None:
     zmin = np.amin(cat.Z)
     print(f"zmin not provided. Using minimum redshift in catalog: {zmin:.3f}")
@@ -133,7 +170,7 @@ assert zmin < zmax, f"zmin ({zmin}) must be less than zmax ({zmax})."
 assert zmin > 0, f"zmin ({zmin}) must be greater than 0."
 assert zmax < 2, f"zmax ({zmax}) must be less than 2."
 print(f"Redshift range to stack: {zmin:.3f} - {zmax:.3f}")
-
+print("Maps are", maps)
 if len(maps) == 1:
     outfile = (
         f"{savepath}/{maps['map1']['shortname']}_consol_stacks_z{zmin:.2f}_{zmax:.2f}_{Path(orientfile).stem}{teststr}.h5"
@@ -161,16 +198,7 @@ if errors:
     else:
         if rank == 0:
             km = kmeans_sample(np.vstack((cat.RA, cat.DEC)).T, nreg, maxiter=100, tol=1.0e-5)
-            labels = km.labels
-            if size > 1:
-                for i in range(1, size):
-                    comm.Send(labels, dest=i)
-                    print(f"sending labels to rank {i}")
-        elif rank > 0:
-            labels = np.empty(len(cat.RA), dtype=np.int64)
-            comm.Recv(labels, source=0)
-            print(f"received labels on rank {rank}")
-        if rank == 0:
+            labels = km.labels.astype(np.int64)
             np.savetxt(labels_file, labels, fmt="%d")
             print(f"Saved region labels to {labels_file}")
             colors = ['C'+str(i) for i in range(10)]
@@ -179,8 +207,12 @@ if errors:
             plt.legend(handles=[plt.Line2D([0], [0], marker='o', color='w', label=f'Region {i}', markerfacecolor=colors[i%10], markersize=5) for i in range(nreg)],loc='best')
             plt.savefig(f"{savepath}/region_splits.png")
             plt.clf()
+        else:
+            labels = None 
+            
+        labels = comm.bcast(labels, root=0)
     cat.labels = labels  # add labels to the Catalog object
-    print(np.unique(labels), "labels")
+    print(f"Rank {rank} has labels with unique values: {np.unique(labels)}")
 else:
     cat.labels = np.zeros(len(cat.RA), dtype=np.int64) # they are all region '0'
     
@@ -256,6 +288,8 @@ if not os.path.exists(file_i):
             for i in range(nruns_local + extras):
                 n = rank * nruns_local + i
                 in_reg = cat.labels == n
+                print("in_reg type", type(in_reg))
+                print("in_reg shape", in_reg.shape)
                 print(f"Rank {rank}, region {n}, Nobj = {in_reg.sum()}")
                 nobj_regn = 0
                 # make an HDF5 group for this region
@@ -331,7 +365,7 @@ if not os.path.exists(file_i):
                     inz = (cat.Z[in_reg] < (z_array[i+1])) & (cat.Z[in_reg] > (z_array[i]))
                     z_rescale_str = f"z_{z_array[i]:.2f}_{z_array[i+1]:.2f}"
                     z_group = reg_group.create_group(z_rescale_str)  # create a subgroup
-                    
+                    print("Creating z group for z range", z_array[i], "-", z_array[i+1], "with", inz.sum(), "objects.")
                     # make the ChunkObj for these z
                     
                     if alpha_inreg is not None:
