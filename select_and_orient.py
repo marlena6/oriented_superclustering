@@ -7,7 +7,8 @@ import healpy as hp
 import astropy.units as u
 
 def get_radecz(filepath, return_id=False, return_weight=False):
-    if "desi" in filepath: # DESI LRG file
+    print(filepath)
+    if "desi" in filepath and "flam" not in filepath: # DESI LRG file
         print("DESI LRG catalog entered.")
         hdu = fits.open(filepath)
         dat = hdu[1].data
@@ -65,8 +66,9 @@ def delta_g(nside, ra, dec, ra_rand=None, dec_rand=None, catalog_weights=None, r
     pix = hp.ang2pix(nside, ra, dec, lonlat=True)
     np.add.at(data_map, pix, catalog_weights)
     if ra_rand is None or dec_rand is None:
-        print("No randoms provided, returning data map only.")
+        print("No randoms provided.")
         if mask is not None:
+            print("Using mask.")
             # make sure msk is binary
             assert np.all((mask==0) | (mask==1)), "Mask should be binary (0 or 1)."
             npix = np.sum(mask)
@@ -234,10 +236,6 @@ def measure_orientation_QU(ra, dec, overdensity_map, mode='density', compute_xy_
         x_pol[grad_alpha_x>0] = -1
         grad_alpha_y = np.cos(alpha[pix])*Vtheta[pix] + np.sin(alpha[pix])*Vphi[pix]
         y_pol[grad_alpha_y<0] = -1
-        import matplotlib.pyplot as plt
-        plt.hist(grad_alpha_x, bins=100)
-        plt.figure()
-        plt.hist(grad_alpha_y, bins=100)
     
     # if(hmap_sym%map(i, 2)*cos(arr(3))-hmap_sym%map(i,1)*sin(arr(3)) .gt. 0.d0 .and. this%xup)then
     #         arr(4) = -1.d0

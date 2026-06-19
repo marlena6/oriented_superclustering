@@ -5,6 +5,7 @@ from astropy.cosmology import Planck18 as cosmo, z_at_value
 import time
 import healpy as hp
 import sys
+sys.path.insert(0, "/global/cfs/cdirs/act/data/mlokken/oriented_stacks/oriented_superclustering/")
 import select_and_orient as sao
 import yaml
 import pandas as pd
