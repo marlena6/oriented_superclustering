@@ -273,7 +273,10 @@ if not os.path.exists(file_i):
             if size==1:
                 # read the whole map
                 imap = enmap.read_map(maps[m]["path"])
-                min_safe_dist_imap = cutout_rad_deg.value * np.sqrt(2) # RH added for distance check
+                min_safe_dist_deg = cutout_rad_deg.value * np.sqrt(2) # RH added for distance check
+                min_safe_dist_rad = np.radians(min_safe_dist_deg)
+                
+
 
             for i in range(nruns_local + extras):
                 n = rank * nruns_local + i
@@ -330,14 +333,15 @@ if not os.path.exists(file_i):
                 ## Distance computed
                 dist_bigmap = dist_to_nearest_edge(np.radians(dec_inreg), np.radians(ra_inreg), np.radians(dec_min_big), np.radians(dec_max_big), np.radians(ra_min_big), np.radians(ra_max_big))
                 dist_imap = dist_to_nearest_edge(np.radians(dec_inreg), np.radians(ra_inreg), np.radians(lowdec.value), np.radians(highdec.value), np.radians(lowra.value), np.radians(highra.value))
-                
-                if np.any(dist_bigmap < min_safe_dist_bigmap):
-                    print(f"Warning: Region {n} has points within {min_safe_dist_bigmap:.6f} deg of the edge of the larger map. ")
+        
+                dist_deg   = np.degrees(dist_bigmap)
 
-                diff_lowra_inreg= (ra_inreg - lowra.value)
-                diff_highra_inreg = (highra.value-ra_inreg )
-                diff_lowdec_inreg= (dec_inreg - lowdec.value)
-                diff_highdec_inreg = (highdec.value-dec_inreg)
+                edge_ok  = dist_imap >= min_safe_dist_rad #RH checking all distances
+                n_total  = len(dist_imap)
+                n_pass   = int(edge_ok.sum())
+                n_fail   = n_total - n_pass
+                print(f"\nEdge-distance test  (min safe = {min_safe_dist_deg:.2f} deg):")
+                print(f"  {n_pass}/{n_total} locations pass  ({n_fail} dropped)")
 
                 if test:
                     plt.hist(dist_imap, bins=6, color="steelblue",
@@ -347,19 +351,30 @@ if not os.path.exists(file_i):
                             edgecolor="white", linewidth=0.6, alpha=0.85)
                     plt.savefig(f"{savepath}/region_{n}_local_diffs.png")
 
-                    # plt.hist(diff_lowra_inreg, bins=50, alpha=0.5, label="diff_lowra")
-                    # plt.hist(diff_highra_inreg, bins=50, alpha=0.5, label="diff_highra")
-                    # plt.legend()
-                    # plt.savefig(f"{savepath}/region_{n}_ra_diffs.png")
-                    # plt.clf()
-                    # plt.hist(diff_lowdec_inreg, bins=50, alpha=0.5, label="diff_lowdec")
-                    # plt.hist(diff_highdec_inreg, bins=50, alpha=0.5, label="diff_highdec")
-                    # plt.legend()
-                    # plt.savefig(f"{savepath}/region_{n}_dec_diffs.png")
-                    # plt.clf()
+                # extract all the thumbnails for this region that have ok distances
+                alpha_inreg = alpha_inreg[edge_ok] if cat.alpha is not None else None
+                x_asym_inreg = x_asym_inreg[edge_ok] if cat.x_asym is not None else None
+                y_asym_inreg = y_asym_inreg[edge_ok] if cat.y_asym is not None else None
+                ra_inreg = ra_inreg[edge_ok]
+                dec_inreg = dec_inreg[edge_ok]
+                z_inreg = z_inreg[edge_ok]
 
-                # RH: actually do the kicking out of point before the z loop
-                #  so that you don't have to modify things post facto
+                diff_lowra_inreg= (ra_inreg - lowra.value)
+                diff_highra_inreg = (highra.value-ra_inreg )
+                diff_lowdec_inreg= (dec_inreg - lowdec.value)
+                diff_highdec_inreg = (highdec.value-dec_inreg)
+
+                ## Distance computed again for check
+                dist_bigmap = dist_to_nearest_edge(np.radians(dec_inreg), np.radians(ra_inreg), np.radians(dec_min_big), np.radians(dec_max_big), np.radians(ra_min_big), np.radians(ra_max_big))
+                dist_imap = dist_to_nearest_edge(np.radians(dec_inreg), np.radians(ra_inreg), np.radians(lowdec.value), np.radians(highdec.value), np.radians(lowra.value), np.radians(highra.value))
+        
+                if test:
+                    plt.hist(dist_imap, bins=6, color="steelblue",
+                            edgecolor="white", linewidth=0.6, alpha=0.85)
+                    plt.savefig(f"{savepath}/region_{n}_bigmap_diffs_postcut.png")
+                    plt.hist(dist_bigmap, bins=6, color="gray",
+                            edgecolor="white", linewidth=0.6, alpha=0.85)
+                    plt.savefig(f"{savepath}/region_{n}_local_diffs_postcut.png")
 
                 chunkObj_reg = Chunk(
                         ra_inreg,

@@ -11,7 +11,7 @@ run:
   restart_run: false
   newdir_name: "actdesi_lrgs_p7_p9_20reg_teststack/"
   test: true
-  nObj_test: 1000   # only used if test=true
+  nObj_test: 100   # only used if test=true
 
 # ===============================
 # Error estimation
