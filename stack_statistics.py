@@ -223,9 +223,7 @@ def total_multipole_power(
             "Both the cosine AND sine moments must be passed if not passing an image"
         )
         r, cos_moments, sin_moments = radial_decompose_2D(img, m_max, R)
-    print("cos moments shape", cos_moments.shape)
     m_power_per_r = cos_moments**2 + sin_moments**2
-    print("sin moments shape", m_power_per_r.shape)
     integrated_power = np.trapz(m_power_per_r * r, r, axis=1)
 
     return integrated_power
