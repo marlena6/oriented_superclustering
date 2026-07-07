@@ -1,0 +1,56 @@
+# ===============================
+# MPI / execution settings
+# ===============================
+mpi:
+  use_mpi: true
+
+# ===============================
+# Run control
+# ===============================
+run:
+  restart_run: false
+  newdir_name: fiducial
+  test: false
+  nObj_test: 10000   # only used if test=true
+
+# ===============================
+# Error estimation
+# ===============================
+errors:
+  enabled: true
+  nreg: 16   # number of regions if enabled
+
+
+# ===============================
+# Stacking / analysis options
+# ===============================
+analysis:
+  orient: asym_xy   # options: original, random, sym, asym_x, asym_y, asym_xy
+  cutout_rad_mpc: 20.0
+  dz_rescale: 0.01
+  zmin: # define if you want to limit the redshift range smaller than that in the catalog
+  zmax:
+  numin:
+  nu_min: 2
+  nu_max: 
+  e_min: 0.3
+  e_max: 
+  
+# ===============================
+# Paths
+# ===============================
+paths:
+  basepath: /pscratch/sd/m/mlokken/actxdesi/flam_dr1lrglike_analysis/
+  orient_file: /pscratch/sd/m/mlokken/actxdesi/flam_dr1lrglike_analysis/flam_11p2_0pt90_0pt95_10pt0Mpc_asym_xy.csv # full path to orient file
+
+# ===============================
+# Maps to stack
+# ===============================
+maps:
+  map1:
+    type: y
+    path: /global/cfs/projectdirs/desi/users/mlokken/oriented_stacks/flam/HYDRO_FIDUCIAL/ComptonY.fits
+    shortname: fl_fid
+
+
+

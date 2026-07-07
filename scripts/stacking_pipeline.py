@@ -4,7 +4,7 @@ sys.path.insert(0, "/global/cfs/cdirs/act/data/mlokken/oriented_stacks/oriented_
 import numpy as np
 from astropy.cosmology import Planck18 as cosmo
 import astropy.units as u
-from pixell import enmap, reproject, utils
+from pixell import enmap, reproject, utils, curvedsky as cs
 import catalog
 from kmeans_radec import kmeans_sample
 from stacking_functions import Chunk, stackChunk, StackGeometry, extractThumbnails
@@ -18,6 +18,7 @@ import filecmp
 import matplotlib.pyplot as plt
 from astropy.coordinates import SkyCoord
 import time
+import healpy as hp
 
 start = time.time()
 # Load config
@@ -66,6 +67,10 @@ cutout_rad = cfg["analysis"]["cutout_rad_mpc"] * u.Mpc
 dz_rescale = cfg["analysis"]["dz_rescale"]
 zmin = cfg["analysis"]["zmin"]
 zmax = cfg["analysis"]["zmax"]
+nu_min = cfg["analysis"]["nu_min"]
+nu_max = cfg["analysis"]["nu_max"]
+e_min = cfg["analysis"]["e_min"]
+e_max = cfg["analysis"]["e_max"]
 
 if zmin in ["None","none",None, ""]:
     zmin = None
@@ -88,58 +93,77 @@ if rank == 0:
 if use_mpi and size > 1:
     comm.Barrier()  # wait for rank 0 to finish making the directory
 
-maps = cfg["maps"]
+map = cfg["map"]
 
 
 # check if each map is an enmap, and convert from healpix to enmap otherwise
 # does another map exist with _enmap in the same directory?
 if rank == 0:
-    for m in maps:
-        mappath = maps[m]["path"]
-        if not os.path.exists(mappath):
-            raise ValueError(f"Map path {mappath} does not exist.")
+    mappath = map["path"]
+    if not os.path.exists(mappath):
+        raise ValueError(f"Map path {mappath} does not exist.")
+    if map["type"] == 'y':
         try:
             shape, wcs = enmap.read_map_geometry(mappath) # quick geometry check which will fail if not an enmap
-            print(f"Map {m} is already an enmap.")
+            print("Map is already an enmap.")
         except Exception as e:
-            print(f"Map {m} is not an enmap. Attempting to convert from healpix.")
+            print("Map is not an enmap. Attempting to convert from healpix.")
             enmap_path = mappath.replace(".fits", "_enmap.fits")
             if os.path.exists(enmap_path):
-                print(f"Enmap version of {m} already exists at {enmap_path}. Using that.")
-                maps[m]["path"] = enmap_path
+                print("Enmap version of map already exists at {enmap_path}. Using that.")
+                map["path"] = enmap_path
             else:
                 import healpy as hp
                 # get the nside without loading the full healpix map
                 
                 hpmap = hp.read_map(mappath)
-                print(f"Reprojecting healpix map {m} to enmap. This may take a while...")
+                print("Reprojecting healpix map to enmap. This may take a while...")
                 shape,wcs = enmap.fullsky_geometry(res=1 * utils.arcmin,proj='car') # 1 arcmin pixels
                 enmap_rp = reproject.healpix2map(hpmap, shape=shape, wcs=wcs, method='spline')
                 enmap.write_map(enmap_path, enmap_rp)
-                print(f"Saved enmap version of {m} to {enmap_path}.")
-            maps[m]["path"] = enmap_path
+                print(f"Saved enmap version of to {enmap_path}.")
+            map["path"] = enmap_path
+    elif map["type"] == 'kappa':
+        try:
+            shape, wcs = enmap.read_map_geometry(mappath) # quick geometry check which will fail if not an enmap
+            print("Map is already an enmap.")
+        except Exception as e:
+            print("Map is not an enmap. Attempting to convert alms to map.")
+            kappa = hp.read_alm(mappath)
+            kappa = np.nan_to_num(kappa, nan=0.0) # turn nans to zeros, they are causing troubles
+            # use the geometry of the ACT ymap
+            shape,wcs = enmap.read_map_geometry("/global/cfs/projectdirs/act/www/dr6_nilc/ymaps_20230220/ilc_actplanck_ymap.fits")
+            filter = np.loadtxt("/global/cfs/projectdirs/act/www/dr6_lensing_v1/maps/baseline/kappa_filter_act_dr6_lensing_v1_baseline.txt")
+            filter_kappa = hp.almxfl(kappa, filter[:,1])
+            kappamap = cs.alm2map(filter_kappa, enmap.empty(shape, wcs))
+            enmap_path = mappath.replace(".fits", "_enmap.fits")
+            enmap_path = os.path.join(map["savemap_path"], os.path.basename(enmap_path))
+            enmap.write_map(enmap_path, kappamap)
+            print("Kappa map written at", enmap_path)
+            # no nans
+            assert(not np.any(np.isnan(kappamap))), "Error: NaNs found in the kappa map"
+            map["path"] = enmap_path
+        
 
 if size > 1:
     # make sure the mappaths are consistent in case they got changed in the previous step
     if rank==0:
-        paths = {m: maps[m]["path"] for m in maps}
+        mappath = map["path"]
     else:
-        paths = None
-    paths = comm.bcast(paths, root=0)
-    for m in maps:
-        maps[m]["path"] = paths[m]
+        mappath = None
+    path = comm.bcast(mappath, root=0)
+    map["path"] = path
 
 # make sure mappath updated
-for m in maps:
-    mappath = maps[m]["path"]
-    print("mappath now", mappath)
-    if not os.path.exists(mappath):
-        raise ValueError(f"Map path {mappath} does not exist.")
+mappath = map["path"]
+print("mappath now", mappath)
+if not os.path.exists(mappath):
+    raise ValueError(f"Map path {mappath} does not exist.")
 # read the orientation information
 if rank == 0:
     # if not already there, save a copy of the orient file in the new directory for bookkeeping
     if not os.path.exists(savepath + os.path.basename(orientfile)):
-        shutil.copy(orientfile, savepath + os.path.basename(orientfile))
+        shutil.copy(orientfile, os.path.join(savepath, os.path.basename(orientfile)))
     # if no yaml file is in the new directory yet, save a copy of the config file for bookkeeping
     yamls = glob.glob(savepath + "/*.yaml")
     assert len(yamls) <= 1, (
@@ -152,12 +176,13 @@ if rank == 0:
     if yamls == []:
         shutil.copy(config_file_path, savepath + "/stacking_config_used.yaml")
 
-
+config = {'nu_min':nu_min, 'nu_max':nu_max, 'e_min':e_min, 'e_max':e_max}
 # every rank reads -- initially had this different but finding issues with broadcasting object on NERSC
 cat = catalog.Catalog(
     name="standard",
     pathInCatalog=orientfile,
     nObj=nObj,
+    config=config
 )
 print(f"Rank {rank} read the catalog with {len(cat.Z)} objects.")
 if zmin is None:
@@ -170,13 +195,10 @@ assert zmin < zmax, f"zmin ({zmin}) must be less than zmax ({zmax})."
 assert zmin > 0, f"zmin ({zmin}) must be greater than 0."
 assert zmax < 2, f"zmax ({zmax}) must be less than 2."
 print(f"Redshift range to stack: {zmin:.3f} - {zmax:.3f}")
-print("Maps are", maps)
-if len(maps) == 1:
-    outfile = (
-        f"{savepath}/{maps['map1']['shortname']}_consol_stacks_z{zmin:.2f}_{zmax:.2f}_{Path(orientfile).stem}{teststr}.h5"
+print("Map entered:", map)
+outfile = (
+        f"{savepath}/{map['shortname']}_consol_stacks_z{zmin:.2f}_{zmax:.2f}_{Path(orientfile).stem}{teststr}.h5"
     )
-else:
-    raise NotImplementedError("Currently only supports one map. Please add functionality to handle multiple maps if needed.")
 
 # Make sure the output file doesn't already exist
 if rank == 0:
@@ -273,152 +295,152 @@ if not os.path.exists(file_i):
         elif cat.constraints is not None:
             f.attrs["orientation_constraints"] = np.unique(cat.constraints).tolist()
             
-        for m in maps:
-            mappath = maps[m]["path"]
-            sn = maps[m]["shortname"]
-            map_group = f.create_group(sn)
-            map_group.attrs["map_path"] = mappath
-            print(f"Handling input map: {mappath}")
-            if size==1:
-                readmap_start = time.time()
-                # read the whole map
-                imap = enmap.read_map(maps[m]["path"])
-                readmap_end = time.time()
-                print(f"Read map in {readmap_end - readmap_start:.1f} seconds.")
-            for i in range(nruns_local + extras):
-                n = rank * nruns_local + i
-                in_reg = cat.labels == n
-                print("in_reg type", type(in_reg))
-                print("in_reg shape", in_reg.shape)
-                print(f"Rank {rank}, region {n}, Nobj = {in_reg.sum()}")
-                nobj_regn = 0
-                # make an HDF5 group for this region
-                reg_group = map_group.create_group(f"reg_{n}")
-                reg_group.attrs["Region"] = n
-                print(f"Analyzing region {n}")
-                # define the map edges for this region
-                sc = SkyCoord(ra=cat.RA[in_reg]*u.deg, dec=cat.DEC[in_reg]*u.deg, frame="icrs")
-                ra_wrapped = sc.ra.wrap_at(180*u.deg)
-                lowra, highra = (
-                    ra_wrapped.min() - (cutout_rad_deg+0.5*u.deg),
-                    ra_wrapped.max() + (cutout_rad_deg+0.5*u.deg),
-                )
-                lowdec, highdec = (
-                    sc.dec.min() - (cutout_rad_deg+0.5*u.deg),
-                    sc.dec.max() + (cutout_rad_deg+0.5*u.deg),
-                )
-                
-                if size > 1:
-                    # check for region crossing the RA = 180 deg line
-                    if abs(highra - lowra) > 180*u.deg:
-                        print(f"Region {n} crosses RA=180 deg line. Adjusting bounds.")
-                        ra_wrapped[ra_wrapped < 0*u.deg] += 360*u.deg
-                        lowra, highra = (
-                            ra_wrapped.min() - (cutout_rad_deg+0.5*u.deg),
-                            ra_wrapped.max() + (cutout_rad_deg+0.5*u.deg),
-                        )
-                        
-                    print(f"Reading chunk of map with bounds RA: [{lowra:.2f},{highra:.2f}], Dec: [{lowdec:.2f},{highdec:.2f}]")
-                    imap = enmap.read_map(
-                        maps[m]["path"],
-                        box=[
-                            [np.radians(lowdec.value), np.radians(highra.value)],
-                            [np.radians(highdec.value), np.radians(lowra.value)],
-                        ],
-                    )
-                # extract all the thumbnails for this region
-                alpha_inreg = cat.alpha[in_reg] if cat.alpha is not None else None
-                x_asym_inreg = cat.x_asym[in_reg] if cat.x_asym is not None else None
-                y_asym_inreg = cat.y_asym[in_reg] if cat.y_asym is not None else None
-                ra_inreg = cat.RA[in_reg]
-                dec_inreg = cat.DEC[in_reg]
-                z_inreg = cat.Z[in_reg]
-                chunkObj_reg = Chunk(
-                        ra_inreg,
-                        dec_inreg,
-                        alpha_inreg,
-                        x_asym_inreg,
-                        y_asym_inreg
-                    )
-                thumbs_time = time.time()
-                thumbs = extractThumbnails(
-                    chunkObj_reg,
-                    geom,
-                    imap,
-                    orient
-                )
-                thumbs_time_end = time.time()
-                print(f"Extracted thumbnails for region {n} in {thumbs_time_end - thumbs_time:.1f} seconds.")
-                
-                stacking_start = time.time()
-                
-                for i in range(len(z_array)-1): # iterate through small z bins
-                    z = z_array[i] # just use the lower z of this slice
-                    Mpc_per_deg_phys_z = cosmo.kpc_proper_per_arcmin(z).to(
-                        u.Mpc / u.degree
-                    )
-                    Mpc_per_deg_comov_z = cosmo.kpc_comoving_per_arcmin(z).to(
-                        u.Mpc / u.degree
-                    )
-                    phys_rescale_factor = Mpc_per_deg_phys_base / Mpc_per_deg_phys_z
-                    comov_rescale_factor = Mpc_per_deg_comov_base / Mpc_per_deg_comov_z
-                    inz = (cat.Z[in_reg] < (z_array[i+1])) & (cat.Z[in_reg] > (z_array[i]))
-                    z_rescale_str = f"z_{z_array[i]:.2f}_{z_array[i+1]:.2f}"
-                    z_group = reg_group.create_group(z_rescale_str)  # create a subgroup
-                    print("Creating z group for z range", z_array[i], "-", z_array[i+1], "with", inz.sum(), "objects.")
-                    # make the ChunkObj for these z
-                    
-                    if alpha_inreg is not None:
-                        alpha_inreg_inz = alpha_inreg[inz]
-                    else:
-                        alpha_inreg_inz = None
-                    if x_asym_inreg is not None:
-                        x_asym_inreg_inz = x_asym_inreg[inz]
-                    else:
-                        x_asym_inreg_inz = None
-                    if y_asym_inreg is not None:
-                        y_asym_inreg_inz = y_asym_inreg[inz]
-                    else:
-                        y_asym_inreg_inz = None
-                    chunkObj = Chunk(
-                        ra_inreg[inz],
-                        dec_inreg[inz],
-                        alpha_inreg_inz,
-                        x_asym_inreg_inz,
-                        y_asym_inreg_inz
+    
+        mappath = map["path"]
+        sn = map["shortname"]
+        map_group = f.create_group(sn)
+        map_group.attrs["map_path"] = mappath
+        print(f"Handling input map: {mappath}")
+        if size==1:
+            readmap_start = time.time()
+            # read the whole map
+            imap = enmap.read_map(mappath)
+            readmap_end = time.time()
+            print(f"Read map in {readmap_end - readmap_start:.1f} seconds.")
+        for i in range(nruns_local + extras):
+            n = rank * nruns_local + i
+            in_reg = cat.labels == n
+            print("in_reg type", type(in_reg))
+            print("in_reg shape", in_reg.shape)
+            print(f"Rank {rank}, region {n}, Nobj = {in_reg.sum()}")
+            nobj_regn = 0
+            # make an HDF5 group for this region
+            reg_group = map_group.create_group(f"reg_{n}")
+            reg_group.attrs["Region"] = n
+            print(f"Analyzing region {n}")
+            # define the map edges for this region
+            sc = SkyCoord(ra=cat.RA[in_reg]*u.deg, dec=cat.DEC[in_reg]*u.deg, frame="icrs")
+            ra_wrapped = sc.ra.wrap_at(180*u.deg)
+            lowra, highra = (
+                ra_wrapped.min() - (cutout_rad_deg+0.5*u.deg),
+                ra_wrapped.max() + (cutout_rad_deg+0.5*u.deg),
+            )
+            lowdec, highdec = (
+                sc.dec.min() - (cutout_rad_deg+0.5*u.deg),
+                sc.dec.max() + (cutout_rad_deg+0.5*u.deg),
+            )
+            
+            if size > 1:
+                # check for region crossing the RA = 180 deg line
+                if abs(highra - lowra) > 180*u.deg:
+                    print(f"Region {n} crosses RA=180 deg line. Adjusting bounds.")
+                    ra_wrapped[ra_wrapped < 0*u.deg] += 360*u.deg
+                    lowra, highra = (
+                        ra_wrapped.min() - (cutout_rad_deg+0.5*u.deg),
+                        ra_wrapped.max() + (cutout_rad_deg+0.5*u.deg),
                     )
                     
-                    if chunkObj.nObj == 0:
-                        # set all arrays as nan
-                        stack_n = [np.nan]
-                        stack_n_phys = [np.nan]
-                        stack_n_comov = [np.nan]
-                    else:
-                        # get the thumbs for these z
-                        thumbs_inz = thumbs[inz]
-                        # get the stack
-                        print("Stacking region", n, "at z", z)
-                        stack_n, stack_n_phys, stack_n_comov = stackChunk(
-                            chunkObj,
-                            geom,
-                            imap,
-                            orient=orient,
-                            rescale_1=phys_rescale_factor,
-                            rescale_2=comov_rescale_factor,
-                            thumbnails=thumbs_inz
-                        )
-                    # save to this delta-z subgroup
-                    z_group.attrs["Nobj"] = chunkObj.nObj
-                    z_group.create_dataset("stack_deg", data=stack_n)
-                    z_group.create_dataset("stack_phys", data=stack_n_phys)
-                    z_group.create_dataset("stack_comov", data=stack_n_comov)
-                    z_group.create_dataset("RA", data=ra_inreg[inz])
-                    z_group.create_dataset("dec", data=dec_inreg[inz])
-                    z_group.create_dataset("z", data=z_inreg[inz])
-                    nobj_regn += chunkObj.nObj
-                reg_group.attrs["Nobj"] = nobj_regn
-                stacking_end = time.time()
-                print(f"Finished stacking region {n} in {stacking_end - stacking_start:.1f} seconds.")
+                print(f"Reading chunk of map with bounds RA: [{lowra:.2f},{highra:.2f}], Dec: [{lowdec:.2f},{highdec:.2f}]")
+                imap = enmap.read_map(
+                    mappath,
+                    box=[
+                        [np.radians(lowdec.value), np.radians(highra.value)],
+                        [np.radians(highdec.value), np.radians(lowra.value)],
+                    ],
+                )
+            # extract all the thumbnails for this region
+            alpha_inreg = cat.alpha[in_reg] if cat.alpha is not None else None
+            x_asym_inreg = cat.x_asym[in_reg] if cat.x_asym is not None else None
+            y_asym_inreg = cat.y_asym[in_reg] if cat.y_asym is not None else None
+            ra_inreg = cat.RA[in_reg]
+            dec_inreg = cat.DEC[in_reg]
+            z_inreg = cat.Z[in_reg]
+            chunkObj_reg = Chunk(
+                    ra_inreg,
+                    dec_inreg,
+                    alpha_inreg,
+                    x_asym_inreg,
+                    y_asym_inreg
+                )
+            thumbs_time = time.time()
+            thumbs = extractThumbnails(
+                chunkObj_reg,
+                geom,
+                imap,
+                orient
+            )
+            thumbs_time_end = time.time()
+            print(f"Extracted thumbnails for region {n} in {thumbs_time_end - thumbs_time:.1f} seconds.")
+            
+            stacking_start = time.time()
+            
+            for i in range(len(z_array)-1): # iterate through small z bins
+                z = z_array[i] # just use the lower z of this slice
+                Mpc_per_deg_phys_z = cosmo.kpc_proper_per_arcmin(z).to(
+                    u.Mpc / u.degree
+                )
+                Mpc_per_deg_comov_z = cosmo.kpc_comoving_per_arcmin(z).to(
+                    u.Mpc / u.degree
+                )
+                phys_rescale_factor = Mpc_per_deg_phys_base / Mpc_per_deg_phys_z
+                comov_rescale_factor = Mpc_per_deg_comov_base / Mpc_per_deg_comov_z
+                inz = (cat.Z[in_reg] < (z_array[i+1])) & (cat.Z[in_reg] > (z_array[i]))
+                z_rescale_str = f"z_{z_array[i]:.2f}_{z_array[i+1]:.2f}"
+                z_group = reg_group.create_group(z_rescale_str)  # create a subgroup
+                print("Creating z group for z range", z_array[i], "-", z_array[i+1], "with", inz.sum(), "objects.")
+                # make the ChunkObj for these z
+                
+                if alpha_inreg is not None:
+                    alpha_inreg_inz = alpha_inreg[inz]
+                else:
+                    alpha_inreg_inz = None
+                if x_asym_inreg is not None:
+                    x_asym_inreg_inz = x_asym_inreg[inz]
+                else:
+                    x_asym_inreg_inz = None
+                if y_asym_inreg is not None:
+                    y_asym_inreg_inz = y_asym_inreg[inz]
+                else:
+                    y_asym_inreg_inz = None
+                chunkObj = Chunk(
+                    ra_inreg[inz],
+                    dec_inreg[inz],
+                    alpha_inreg_inz,
+                    x_asym_inreg_inz,
+                    y_asym_inreg_inz
+                )
+                
+                if chunkObj.nObj == 0:
+                    # set all arrays as nan
+                    stack_n = [np.nan]
+                    stack_n_phys = [np.nan]
+                    stack_n_comov = [np.nan]
+                else:
+                    # get the thumbs for these z
+                    thumbs_inz = thumbs[inz]
+                    # get the stack
+                    print("Stacking region", n, "at z", z)
+                    stack_n, stack_n_phys, stack_n_comov = stackChunk(
+                        chunkObj,
+                        geom,
+                        imap,
+                        orient=orient,
+                        rescale_1=phys_rescale_factor,
+                        rescale_2=comov_rescale_factor,
+                        thumbnails=thumbs_inz
+                    )
+                # save to this delta-z subgroup
+                z_group.attrs["Nobj"] = chunkObj.nObj
+                z_group.create_dataset("stack_deg", data=stack_n)
+                z_group.create_dataset("stack_phys", data=stack_n_phys)
+                z_group.create_dataset("stack_comov", data=stack_n_comov)
+                z_group.create_dataset("RA", data=ra_inreg[inz])
+                z_group.create_dataset("dec", data=dec_inreg[inz])
+                z_group.create_dataset("z", data=z_inreg[inz])
+                nobj_regn += chunkObj.nObj
+            reg_group.attrs["Nobj"] = nobj_regn
+            stacking_end = time.time()
+            print(f"Finished stacking region {n} in {stacking_end - stacking_start:.1f} seconds.")
 else:
     assert restart_run, (
         f"File {file_i} already exists. If you want to retry consolidating the files, set restart_run=True."
@@ -433,27 +455,24 @@ if use_mpi and size > 1:
 
         with h5py.File(outfile, "w") as consol_f:
             files = glob.glob(f"{savepath}/stacks_{Path(orientfile).stem}*{teststr}.h5")
-            for m in maps:
-                mappath = maps[m]["path"]
-                sn = maps[m]["shortname"]
-                consol_f.create_group(sn)
-                for fname in sorted(files):
-                    with h5py.File(fname, "r") as mpif:
-                        if (
-                            f"_0{teststr}.h5" in fname
-                        ):  # if the rank_0 file, copy over the attributes (only need to do once)
-                            consol_f.attrs["cutout_rad_deg"] = mpif.attrs[
-                                "cutout_rad_deg"
-                            ]
-                            consol_f.attrs["cutout_rad_cMpc"] = mpif.attrs[
-                                "cutout_rad_cMpc"
-                            ]
-                            consol_f.attrs["cutout_rad_pMpc"] = mpif.attrs[
-                                "cutout_rad_pMpc"
-                            ]
-                            consol_f[sn].attrs["map_path"] = mpif[sn].attrs["map_path"]
-                        for group in mpif[sn].keys():
-                            mpif[sn].copy(mpif[sn][group], consol_f[sn], name=group)
+            consol_f.create_group(sn)
+            for fname in sorted(files):
+                with h5py.File(fname, "r") as mpif:
+                    if (
+                        f"_0{teststr}.h5" in fname
+                    ):  # if the rank_0 file, copy over the attributes (only need to do once)
+                        consol_f.attrs["cutout_rad_deg"] = mpif.attrs[
+                            "cutout_rad_deg"
+                        ]
+                        consol_f.attrs["cutout_rad_cMpc"] = mpif.attrs[
+                            "cutout_rad_cMpc"
+                        ]
+                        consol_f.attrs["cutout_rad_pMpc"] = mpif.attrs[
+                            "cutout_rad_pMpc"
+                        ]
+                        consol_f[sn].attrs["map_path"] = mpif[sn].attrs["map_path"]
+                    for group in mpif[sn].keys():
+                        mpif[sn].copy(mpif[sn][group], consol_f[sn], name=group)
             for file in files:
                 print(f"Removing {file}")
                 os.remove(file)
