@@ -356,12 +356,10 @@ def retrieve_stack_info(
             )
             imgs.append(thisreg_stack)
             wgts.append(mapdata[reg].attrs["Nobj"])
-            print("Radial decompose region:", reg)
             if cap_filter:
-                r, Cr, Sr = ss.CAP_2D_multipole(thisreg_stack, 5, f.attrs[stype])
+                r, Cr, Sr = ss.CAP_2D_multipole(thisreg_stack, 5, R=f.attrs[stype])
             else:
-                r, Cr, Sr = ss.radial_decompose_2D(thisreg_stack, 5, f.attrs[stype])
-            print("r", r)
+                r, Cr, Sr = ss.radial_decompose_2D(thisreg_stack, 5, R=f.attrs[stype])
             Crprofs.append(Cr)
             Srprofs.append(Sr)
     Crprofs = np.array(Crprofs).transpose(1, 0, 2)
@@ -395,7 +393,7 @@ def retrieve_stack_info(
     MyStack.bin_and_get_stats(binsize)  # Mpc
     return MyStack
 
-def plotstack(im_array, radius, vmin=-1e-7, vmax=1e-7, smooth=False, unit='cMpc', label="Compton-$y$", grid=True, title=None, subtract_average=False):
+def plotstack(im_array, radius, vmin=-1e-7, vmax=1e-7, smooth=False, unit='cMpc', label="Compton-$y$", grid=True, title=None, subtract_average=False, cmap='afmhot'):
     from scipy import ndimage
     import matplotlib.pyplot as plt
     fig    = plt.figure(figsize=[8,5])
@@ -405,7 +403,7 @@ def plotstack(im_array, radius, vmin=-1e-7, vmax=1e-7, smooth=False, unit='cMpc'
         toplot = im_array
     if subtract_average:
         toplot = toplot - get_annulus(im_array)
-    smoothplot = plt.imshow(toplot, origin='lower', cmap='afmhot', vmin=vmin, vmax=vmax)
+    smoothplot = plt.imshow(toplot, origin='lower', cmap=cmap, vmin=vmin, vmax=vmax)
     imhalf = im_array.shape[0]//2
     if grid:
         plt.grid()

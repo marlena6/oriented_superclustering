@@ -5,6 +5,7 @@ from astropy.cosmology import Planck18 as cosmo, z_at_value
 import time
 import healpy as hp
 import sys
+sys.path.insert(0, "/global/cfs/cdirs/act/data/mlokken/oriented_stacks/oriented_superclustering/")
 import select_and_orient as sao
 import yaml
 import pandas as pd
@@ -30,12 +31,10 @@ orient_catalog  = cfg["files"]["orient_object_catalog"]
 randoms_catalog = cfg["files"]["randoms_catalog"]
 maskfile = cfg["files"]["mask"] # if not None, should be a binary mask: fits file with 1s in the area to use and 0s in the area to mask out
 
-nu_min = cfg["analysis"]["nu_min"]
-nu_max = cfg["analysis"]["nu_max"]
-e_min  = cfg["analysis"]["e_min"]
-e_max  = cfg["analysis"]["e_max"]
 # Mode for splitting the data along the line-of-sight: either custom_zlist, custom_dlist, auto_all, or auto_overlap (automatic bin sandwiching with predefined relative sizes)
 los_split_mode = cfg["analysis"]["los_split_mode"]
+so_width = cfg["analysis"]["stacking_slice_width_Mpc"] # width of the slice in which to select the stacking objects, in cMpc
+oo_width = cfg["analysis"]["orientation_slice_width_Mpc"] # width of the slice in which to select the orientation objects, in cMpc; only relevant if los_split_mode is 'auto_overlap'
 # split if you want to only use some of the galaxy data to orient and other to stack
 frac_use = cfg["analysis"]["fraction_input_data"]
 # Smooth the maps by a Gaussian with this beam FWHM
@@ -62,22 +61,16 @@ else:
 
 smth_str = ("{:.1f}".format(smth)).replace('.','pt')
 
-# define the width in comoving Mpc for stacking object bins
-so_width = 5
-# and for orientation object bins
-oo_width = 20
+
 pct = frac_use*100
 if frac_use != 1:
     pctstr = "_{:.0f}pct".format(pct)
 else:
     pctstr = ""
-if nu_min is not None or nu_max is not None or e_min is not None or e_max is not None:
-    cutstr = '_cuts'
-else:
-    cutstr = ''
+
 zstr = "{:.2f}_{:.2f}".format(minz, maxz).replace('.','pt')
 # savename for file
-save_file = os.path.join(save_path, f"{orient_objects_label}{pctstr}_{zstr}_{smth_str}Mpc{cutstr}_{orient_mode}.csv")
+save_file = os.path.join(save_path, f"{orient_objects_label}{pctstr}_{zstr}_{smth_str}Mpc_{orient_mode}.csv")
 if os.path.exists(save_file):
     raise ValueError(f"Output file {save_file} already exists. Please change the save_path or delete the existing file to avoid overwriting.")
 else:
@@ -273,11 +266,11 @@ if size>1:
 alpha_all = []
 xpol_all = []
 ypol_all = []
-ca_all = []
-sa_all = []
 ra_all = []
 dec_all = []
 z_all = []
+e_all = []
+nu_all = []
 
 if zlist_tot is None:
     zlist_tot = np.loadtxt(os.path.join(save_path, "zlist.txt"))
@@ -302,7 +295,7 @@ for i in range(len(zlist_tot)):
         so_dhi   = bincent+so_width/2.
         so_zlow, so_zhi = z_at_value(cosmo.comoving_distance, so_dlow*u.Mpc).value, z_at_value(cosmo.comoving_distance, so_dhi*u.Mpc).value
         print("Finding stacking objects within {:.1f} cMpc of {:.0f} Mpc".format(so_width/2., bincent))
-        print("In redshift space, this is between {:.2f} and {:.2f}.".format(so_zlow,so_zhi))
+        print("In redshift space, this is between {:.4f} and {:.4f}.".format(so_zlow,so_zhi))
     elif los_split_mode=='auto_all' or los_split_mode=='custom_zlist':
         so_dlow, so_dhi = oo_dlow, oo_dhi
         so_zlow, so_zhi = oo_zlow, oo_zhi
@@ -324,7 +317,7 @@ for i in range(len(zlist_tot)):
     dec_so_bin = dec_so[in_so_bin]
     w_so_bin  = w_so[in_so_bin]
     
-    print("Orienting by surrounding galaxies from {:.1f} to {:.1f} Mpc, {:.2f} to {:.2f}\n".format(oo_dlow,oo_dhi,oo_zlow,oo_zhi))
+    print("Orienting by surrounding galaxies from {:.1f} to {:.1f} Mpc, {:.4f} to {:.4f}\n".format(oo_dlow,oo_dhi,oo_zlow,oo_zhi))
     if filenames_in_Mpc:
         if int(oo_dlow)==oo_dlow and int(oo_dhi)==oo_dhi:
             binstr_orient = "{:d}_{:d}Mpc".format(int(oo_dlow), int(oo_dhi))
@@ -370,20 +363,19 @@ for i in range(len(zlist_tot)):
     
     
     if orient_mode in ['asym_xy', 'asym_x', 'asym_y']:
-        return_xy_pol = True
+        compute_xy_pol = True
     else:
-        return_xy_pol = False
+        compute_xy_pol = False
     print("Getting orientations.")
-    alpha, x_pol, y_pol, ca, sa, final_cut = sao.measure_orientation(ra_so_bin, dec_so_bin, odmap, cotth, e_min=e_min, e_max=e_max, nu_min=nu_min, mode='density', return_xy_pol=return_xy_pol, mask=mask)
-    
+    alpha, e, nu, x_pol, y_pol = sao.measure_orientation_QU(ra_so_bin, dec_so_bin, odmap, mode='density', compute_xy_pol=True, mask=mask)
     alpha_all.extend(alpha)
     xpol_all.extend(x_pol)
     ypol_all.extend(y_pol)
-    ca_all.extend(ca)
-    sa_all.extend(sa)
-    ra_all.extend(ra_so_bin[final_cut])
-    dec_all.extend(dec_so_bin[final_cut])
-    z_all.extend(z_so_bin[final_cut])
+    ra_all.extend(ra_so_bin)
+    dec_all.extend(dec_so_bin)
+    z_all.extend(z_so_bin)
+    e_all.extend(e)
+    nu_all.extend(nu)
     
     end = time.time()
     print(f"Time elapsed for bin {i} out of {len(zlist_tot)} on rank {rank}: {end- zbin_start_time:.2f} seconds.")
@@ -395,11 +387,11 @@ print(f"Total time for processing zbins was {tot_time:.0f} seconds, or {(tot_tim
 alpha_all = np.asarray(alpha_all)
 xpol_all = np.asarray(xpol_all)
 ypol_all = np.asarray(ypol_all)
-ca_all = np.asarray(ca_all)
-sa_all = np.asarray(sa_all)
 ra_all = np.asarray(ra_all)
 dec_all = np.asarray(dec_all)
 z_all = np.asarray(z_all)
+e_all = np.asarray(e_all)
+nu_all = np.asarray(nu_all)
 
     
 if size>1:
@@ -416,6 +408,8 @@ if size>1:
         recvbuf_alpha = np.empty(total_size, dtype=np.float64)
         recvbuf_xpol = np.empty(total_size, dtype=np.int32)
         recvbuf_ypol = np.empty(total_size, dtype=np.int32)
+        recvbuf_nu = np.empty(total_size, dtype=np.float64)
+        recvbuf_e = np.empty(total_size, dtype=np.float64)
     else:
         recvbuf_ra = None
         recvbuf_dec = None
@@ -423,6 +417,8 @@ if size>1:
         recvbuf_alpha = None
         recvbuf_xpol = None
         recvbuf_ypol = None
+        recvbuf_e = None
+        recvbuf_nu = None
         counts = None
         displs = None
 
@@ -433,6 +429,8 @@ if size>1:
     comm.Gatherv(np.asarray(alpha_all), [recvbuf_alpha, counts, displs, MPI.DOUBLE], root=0)    
     comm.Gatherv(np.asarray(xpol_all), [recvbuf_xpol, counts, displs, MPI.INT], root=0)
     comm.Gatherv(np.asarray(ypol_all), [recvbuf_ypol, counts, displs, MPI.INT], root=0)
+    comm.Gatherv(np.asarray(e_all), [recvbuf_e, counts, displs, MPI.INT], root=0)
+    comm.Gatherv(np.asarray(nu_all), [recvbuf_nu, counts, displs, MPI.INT], root=0)
 
     ra_all = recvbuf_ra
     dec_all = recvbuf_dec
@@ -440,11 +438,13 @@ if size>1:
     alpha_all = recvbuf_alpha
     xpol_all = recvbuf_xpol
     ypol_all = recvbuf_ypol
+    e_all = recvbuf_e
+    nu_all = recvbuf_nu
     
 
 # only rank 0 writes to file
 if rank==0:
-    df = pd.DataFrame({'RA':ra_all, 'DEC':dec_all, 'Z':z_all, 'alpha':alpha_all, 'x_asym':xpol_all, 'y_asym':ypol_all, 'config':os.path.basename(config_file_path).replace('.yaml','')})
+    df = pd.DataFrame({'RA':ra_all, 'DEC':dec_all, 'Z':z_all, 'alpha':alpha_all, 'x_asym':xpol_all, 'y_asym':ypol_all, 'e':e_all, 'nu':nu_all, 'config':os.path.basename(config_file_path).replace('.yaml','')})
     df.to_csv(save_file, index=False)
     
 print(f"Final time: {time.time() - start:.2f} seconds.")
