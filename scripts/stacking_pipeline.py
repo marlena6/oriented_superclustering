@@ -19,6 +19,7 @@ import matplotlib.pyplot as plt
 from astropy.coordinates import SkyCoord
 import time
 import healpy as hp
+from utils import dist_to_nearest_edge
 
 start = time.time()
 # Load config
@@ -159,6 +160,11 @@ mappath = map["path"]
 print("mappath now", mappath)
 if not os.path.exists(mappath):
     raise ValueError(f"Map path {mappath} does not exist.")
+
+# Reading the geometry of the bigger map to keep for later
+shape,wcs=enmap.read_fits_geometry(mappath, hdu=None, quick=True)
+box = enmap.box(shape, wcs)   # shape (2,2): [[dec_min,ra_min],[dec_max,ra_max]] in radians
+
 # read the orientation information
 if rank == 0:
     # if not already there, save a copy of the orient file in the new directory for bookkeeping
@@ -307,6 +313,8 @@ if not os.path.exists(file_i):
             imap = enmap.read_map(mappath)
             readmap_end = time.time()
             print(f"Read map in {readmap_end - readmap_start:.1f} seconds.")
+            min_safe_dist_deg = cutout_rad_deg.value * np.sqrt(2) # RH added for distance check
+            min_safe_dist_rad = np.radians(min_safe_dist_deg)
         for i in range(nruns_local + extras):
             n = rank * nruns_local + i
             in_reg = cat.labels == n
@@ -348,13 +356,57 @@ if not os.path.exists(file_i):
                         [np.radians(highdec.value), np.radians(lowra.value)],
                     ],
                 )
-            # extract all the thumbnails for this region
+            # extract the points within the sky region
             alpha_inreg = cat.alpha[in_reg] if cat.alpha is not None else None
             x_asym_inreg = cat.x_asym[in_reg] if cat.x_asym is not None else None
             y_asym_inreg = cat.y_asym[in_reg] if cat.y_asym is not None else None
-            ra_inreg = cat.RA[in_reg]
+            ra_inreg = ra_wrapped.degree
             dec_inreg = cat.DEC[in_reg]
             z_inreg = cat.Z[in_reg]
+
+            ## Distance computed
+            dist_imap = dist_to_nearest_edge(np.radians(dec_inreg), np.radians(ra_inreg), np.radians(lowdec.value), np.radians(highdec.value), np.radians(lowra.value), np.radians(highra.value))
+            print("RA bounds:", lowra, highra)
+            print("RA range of objects:", ra_inreg.min(), ra_inreg.max())
+            print("dist_imap min/max:", np.degrees(dist_imap).min(),
+                                        np.degrees(dist_imap).max())
+
+            edge_ok  = dist_imap >= min_safe_dist_rad #RH checking all distances
+            bad = ~edge_ok
+            print("Failed RAs:", ra_inreg[bad][:10])
+            print("Failed Decs:", dec_inreg[bad][:10])
+            print("Failed distances:", np.degrees(dist_imap[bad][:10]))
+            n_total  = len(dist_imap)
+            n_pass   = int(edge_ok.sum())
+            n_fail   = n_total - n_pass
+            print(f"  {n_pass}/{n_total} locations pass  ({n_fail} dropped)")
+
+            if test:
+                plt.hist(dist_imap, bins=6, color="steelblue",
+                        edgecolor="white", linewidth=0.6, alpha=0.85)
+                plt.savefig(f"{savepath}/region_{n}_local_diffs.png")
+            
+            # extract all the thumbnails for this region that have ok distances
+            alpha_inreg = alpha_inreg[edge_ok] if cat.alpha is not None else None
+            x_asym_inreg = x_asym_inreg[edge_ok] if cat.x_asym is not None else None
+            y_asym_inreg = y_asym_inreg[edge_ok] if cat.y_asym is not None else None
+            ra_inreg = ra_inreg[edge_ok]
+            dec_inreg = dec_inreg[edge_ok]
+            z_inreg = z_inreg[edge_ok]
+
+            diff_lowra_inreg= (ra_inreg - lowra.value)
+            diff_highra_inreg = (highra.value-ra_inreg )
+            diff_lowdec_inreg= (dec_inreg - lowdec.value)
+            diff_highdec_inreg = (highdec.value-dec_inreg)
+
+            ## Distance computed again for check
+            dist_imap = dist_to_nearest_edge(np.radians(dec_inreg), np.radians(ra_inreg), np.radians(lowdec.value), np.radians(highdec.value), np.radians(lowra.value), np.radians(highra.value))
+    
+            if test:
+                plt.hist(dist_imap, bins=6, color="steelblue",
+                        edgecolor="white", linewidth=0.6, alpha=0.85)
+                plt.savefig(f"{savepath}/region_{n}_local_diffs_postcut.png")
+
             chunkObj_reg = Chunk(
                     ra_inreg,
                     dec_inreg,
@@ -384,7 +436,7 @@ if not os.path.exists(file_i):
                 )
                 phys_rescale_factor = Mpc_per_deg_phys_base / Mpc_per_deg_phys_z
                 comov_rescale_factor = Mpc_per_deg_comov_base / Mpc_per_deg_comov_z
-                inz = (cat.Z[in_reg] < (z_array[i+1])) & (cat.Z[in_reg] > (z_array[i]))
+                inz = (z_inreg < (z_array[i+1])) & (z_inreg > (z_array[i]))
                 z_rescale_str = f"z_{z_array[i]:.2f}_{z_array[i+1]:.2f}"
                 z_group = reg_group.create_group(z_rescale_str)  # create a subgroup
                 print("Creating z group for z range", z_array[i], "-", z_array[i+1], "with", inz.sum(), "objects.")
