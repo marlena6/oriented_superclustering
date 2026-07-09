@@ -72,6 +72,7 @@ class Catalog(object):
             self.DEC = data['DEC'][sel].to_numpy()  # [deg]
             self.Z = data['Z'][sel].to_numpy()
             self.alpha = None
+            self.vR = None
             self.x_asym = None
             self.y_asym = None
             self.e = None
@@ -91,6 +92,8 @@ class Catalog(object):
                 self.nu = data['nu'][sel].to_numpy()
             if 'e' in data:
                 self.e  = data['e'][sel].to_numpy()
+            if 'vR' in data:
+                self.vR = data['vR'][sel].to_numpy() # 1 or -1
             self.hdr = header
 
             

@@ -5,7 +5,7 @@ import sys
 import matplotlib.pyplot as plt
 
 class Chunk:
-    def __init__(self, RA, DEC, alpha=None, x_asym=None, y_asym=None):
+    def __init__(self, RA, DEC, alpha=None, x_asym=None, y_asym=None, vR=None):
         if len(RA) != len(DEC):
             sys.exit("RA and Dec must have the same length.")
         self.nObj = len(RA)
@@ -14,6 +14,8 @@ class Chunk:
         self.alpha = alpha
         self.x_asym = x_asym
         self.y_asym = y_asym
+        self.vR = vR # B.H.
+        self.velocity_stack = True if self.vR is not None else False # B.H.
 
 class StackGeometry:
     def __init__(self, cutout_rad_deg, cutout_resolution_deg):
@@ -226,7 +228,7 @@ def stackChunk(
             elif orient in ["sym", "asym_x", "asym_y", "asym_xy"]:
                 ca = np.cos(iChunk.alpha[iObj])
                 sa = np.sin(iChunk.alpha[iObj])
-            
+
             
             if angledef == "CCofRA":
                 R = np.array([[ca, sa], [-sa, ca]]) # Boryana's version (orientations defined wrt RA axis, I think)
@@ -237,6 +239,10 @@ def stackChunk(
             else:
                 sys.exit("angledef must be one of 'CCofRA' or 'CofDec'.")
             stamp = thumbs[iObj]
+
+            # B.H.
+            if iChunk.velocity_stack:
+                stamp *= iChunk.vR[iObj]
             
             fun2D = RectBivariateSpline(x_lrg, y_lrg, stamp, kx=1, ky=1)
             X_rot, Y_rot = np.dot(R, XY)

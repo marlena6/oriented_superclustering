@@ -1,6 +1,7 @@
 import sys
 # insert path 1 level up
-sys.path.insert(0, "/global/cfs/cdirs/act/data/mlokken/oriented_stacks/oriented_superclustering/")
+#sys.path.insert(0, "/global/cfs/cdirs/act/data/mlokken/oriented_stacks/oriented_superclustering/")
+sys.path.insert(0, "/global/homes/b/boryanah/repos/oriented_superclustering")
 import numpy as np
 from astropy.cosmology import Planck18 as cosmo
 import astropy.units as u
@@ -37,11 +38,11 @@ if use_mpi:
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     size = comm.Get_size()
+    comm.Barrier()
 else:
     rank = 0
     size = 1
 
-comm.Barrier()
 print("rank", rank, "passed barrier")
 
 restart_run = cfg["run"]["restart_run"]
@@ -145,7 +146,7 @@ if rank == 0:
             map["path"] = enmap_path
         
 
-if size > 1:
+if use_mpi and size > 1:
     # make sure the mappaths are consistent in case they got changed in the previous step
     if rank==0:
         mappath = map["path"]
@@ -231,8 +232,9 @@ if errors:
             plt.clf()
         else:
             labels = None 
-            
-        labels = comm.bcast(labels, root=0)
+
+        if use_mpi and size > 1:
+            labels = comm.bcast(labels, root=0)
     cat.labels = labels  # add labels to the Catalog object
     print(f"Rank {rank} has labels with unique values: {np.unique(labels)}")
 else:
@@ -355,12 +357,15 @@ if not os.path.exists(file_i):
             ra_inreg = cat.RA[in_reg]
             dec_inreg = cat.DEC[in_reg]
             z_inreg = cat.Z[in_reg]
-            chunkObj_reg = Chunk(
+            # B.H.
+            vr_inreg = cat.vR[in_reg] if cat.vR is not None else None
+            chunkObj_reg = Chunk( # B.H. vR flag in the yaml file
                     ra_inreg,
                     dec_inreg,
                     alpha_inreg,
                     x_asym_inreg,
-                    y_asym_inreg
+                    y_asym_inreg,
+                    vr_inreg - np.mean(vr_inreg) # B.H.
                 )
             thumbs_time = time.time()
             thumbs = extractThumbnails(
@@ -402,12 +407,17 @@ if not os.path.exists(file_i):
                     y_asym_inreg_inz = y_asym_inreg[inz]
                 else:
                     y_asym_inreg_inz = None
-                chunkObj = Chunk(
+                if vr_inreg is not None:
+                    vr_inreg_inz = vr_inreg[inz]
+                else:
+                    vr_inreg_inz = None
+                chunkObj = Chunk( # B.H.
                     ra_inreg[inz],
                     dec_inreg[inz],
                     alpha_inreg_inz,
                     x_asym_inreg_inz,
-                    y_asym_inreg_inz
+                    y_asym_inreg_inz,
+                    vr_inreg_inz - np.mean(vr_inreg_inz)
                 )
                 
                 if chunkObj.nObj == 0:
@@ -427,7 +437,7 @@ if not os.path.exists(file_i):
                         orient=orient,
                         rescale_1=phys_rescale_factor,
                         rescale_2=comov_rescale_factor,
-                        thumbnails=thumbs_inz
+                        thumbnails=thumbs_inz 
                     )
                 # save to this delta-z subgroup
                 z_group.attrs["Nobj"] = chunkObj.nObj
