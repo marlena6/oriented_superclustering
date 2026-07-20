@@ -5,7 +5,7 @@ import sys
 import matplotlib.pyplot as plt
 
 class Chunk:
-    def __init__(self, RA, DEC, alpha=None, x_asym=None, y_asym=None, vR=None):
+    def __init__(self, RA, DEC, alpha=None, x_asym=None, y_asym=None, vR=None, velocity_stack=False):
         if len(RA) != len(DEC):
             sys.exit("RA and Dec must have the same length.")
         self.nObj = len(RA)
@@ -15,7 +15,7 @@ class Chunk:
         self.x_asym = x_asym
         self.y_asym = y_asym
         self.vR = vR # B.H.
-        self.velocity_stack = True if self.vR is not None else False # B.H.
+        self.velocity_stack = True if velocity_stack else False
 
 class StackGeometry:
     def __init__(self, cutout_rad_deg, cutout_resolution_deg):
