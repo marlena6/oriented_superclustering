@@ -24,6 +24,7 @@ def npz_to_csv(path):
     dataframe.to_csv(out_csv, index=False)
     print(f"Saved {out_csv}")
 
+# computing the distance to the nearest edge of the map 
 def dist_to_nearest_edge(dec_rad, ra_rad, dec_min_map,dec_max_map,ra_min_map,ra_max_map):
     """Minimum angular distance [rad] from (dec, ra) to the map boundary."""
     cos_dec = np.cos(dec_rad)
