@@ -8,3 +8,4 @@ __pycache__/*
 *.out
 *.err
 *.h5
+*/.ipynb_checkpoints/*
