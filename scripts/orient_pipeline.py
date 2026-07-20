@@ -146,7 +146,6 @@ if rank == 0:
     
     
     if size > 1:
-        print("Originally there are, ", len(zlist_tot), "many bins. We will divide into ", size)
         # divide all catalogs into z bins to be shared across the nodes
         # prepare the lists for sending
         ra_so_allranks = []
@@ -211,24 +210,12 @@ if rank == 0:
             dec_rand_allranks = np.concatenate(dec_rand_allranks).astype(np.float64)
             z_rand_allranks = np.concatenate(z_rand_allranks).astype(np.float64)
             w_rand_allranks = np.concatenate(w_rand_allranks).astype(np.float64)
-        if rank == 0:
-            print("Built scatter arrays:",
-          len(ra_so_allranks),
-          counts_so,
-          displays_so[-1]+counts_so[-1],
-          flush=True)
-          
-        print("dtype:", ra_so_allranks.dtype)
-        print("contiguous:", ra_so_allranks.flags['C_CONTIGUOUS'])
-        print("size:", ra_so_allranks.size)
-        print("counts sum:", counts_so.sum())
-        print("max disp:", displays_so.max())
+
 if size>1:
     comm.Barrier()  # wait for rank 0 to finish these tasks
     time_to_initiate = time.time()
     print(f"Time that rank {rank} waited to receive data: {time_to_initiate - start:.2f} seconds.")
     # Share metadata with all ranks
-    print("here 1.")
     counts_so = comm.bcast(counts_so, root=0)
     if orient_catalog is not None:
         counts_oo = comm.bcast(counts_oo, root=0)
@@ -245,7 +232,6 @@ if size>1:
     z_so = np.empty(counts_so[rank], dtype=np.float64)
     w_so = np.empty(counts_so[rank], dtype=np.float64)
     # send the data with scatterv
-    print("here 2. rank", rank, "thinks orient_catalog is", orient_catalog, "and randoms_catalog is", randoms_catalog)  
     if rank == 0:
         sendbuf_raso = [ra_so_allranks, counts_so, displays_so, MPI.DOUBLE]
         sendbuf_decso = [dec_so_allranks, counts_so, displays_so, MPI.DOUBLE]
@@ -265,9 +251,7 @@ if size>1:
     # comm.Scatterv([z_so_allranks, counts_so, displays_so, MPI.DOUBLE], z_so, root=0)
     # 
     # comm.Scatterv([w_so_allranks, counts_so, displays_so, MPI.DOUBLE], w_so, root=0)
-    print("here 3.")
     if orient_catalog is not None:
-        print("here.")
         ra_oo = np.empty(counts_oo[rank], dtype=np.float64)
         comm.Scatterv([ra_oo_allranks, counts_oo, displays_oo, MPI.DOUBLE], ra_oo, root=0)
         dec_oo = np.empty(counts_oo[rank], dtype=np.float64)
@@ -277,7 +261,6 @@ if size>1:
         w_oo = np.empty(counts_oo[rank], dtype=np.float64)
         comm.Scatterv([w_oo_allranks, counts_oo, displays_oo, MPI.DOUBLE], w_oo, root=0)
     if randoms_catalog is not None:
-        print("here 2.")
         ra_rand = np.empty(counts_rand[rank], dtype=np.float64)
         comm.Scatterv([ra_rand_allranks, counts_rand, displays_rand, MPI.DOUBLE], ra_rand, root=0)
         dec_rand = np.empty(counts_rand[rank], dtype=np.float64)
@@ -287,14 +270,11 @@ if size>1:
         w_rand = np.empty(counts_rand[rank], dtype=np.float64)
         comm.Scatterv([w_rand_allranks, counts_rand, displays_rand, MPI.DOUBLE], w_rand, root=0)
     if maskfile is not None:
-        print("here 3.")
         mask = comm.bcast(mask, root=0)
     sending_time = time.time()
-    print("here 4.")
     print(f"Time that rank {rank} took to receive data: {sending_time - start:.2f} seconds.")
     # print(rank, ra_so.min(), ra_so.max())
     # print(rank, dec_so.min(), dec_so.max())
-    print("here 5.")
 alpha_all = []
 xpol_all = []
 ypol_all = []
@@ -306,7 +286,6 @@ nu_all = []
 
 if zlist_tot is None:
     zlist_tot = np.loadtxt(os.path.join(save_path, "zlist.txt"))
-print("here 6.")
 # prepare the cotangent theta values for the healpix maps
     # no longer necessary
 # npix  = hp.nside2npix(nside)
@@ -383,13 +362,6 @@ for i in range(len(zlist_tot)):
     if randoms_catalog is not None:
         odmap, mask = sao.delta_g(nside, ra_oo_bin, dec_oo_bin, ra_rand=ra_rand_bin, dec_rand=dec_rand_bin, catalog_weights=w_oo_bin, randoms_weights=w_rand_bin, smth=smth_arcmin)
     elif maskfile is not None:
-        print(
-        rank,
-        "orient_catalog:", orient_catalog,
-        "len(ra_so):", len(ra_so),
-        "has ra_oo:", "ra_oo" in locals(),
-        flush=True
-    )
         odmap = sao.delta_g(nside, ra_oo_bin, dec_oo_bin, catalog_weights=w_oo_bin, mask=mask, smth=smth_arcmin)
     
     
