@@ -1,7 +1,7 @@
 import sys
 # insert path 1 level up
-#sys.path.insert(0, "/global/cfs/cdirs/act/data/mlokken/oriented_stacks/oriented_superclustering/")
-sys.path.insert(0, "/global/homes/b/boryanah/repos/oriented_superclustering")
+sys.path.insert(0, "/global/cfs/cdirs/act/data/mlokken/oriented_stacks/oriented_superclustering/")
+# sys.path.insert(0, "/global/homes/b/boryanah/repos/oriented_superclustering")
 import numpy as np
 from astropy.cosmology import Planck18 as cosmo
 import astropy.units as u
@@ -51,6 +51,7 @@ test = cfg["run"]["test"]
 if test:
     nObj = cfg["run"]["nObj_test"]
     teststr = f"_test{nObj:.1e}"
+    print("nObj_test is set to", nObj, "for testing purposes.")
 else:
     nObj = None
     teststr = ""
