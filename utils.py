@@ -23,3 +23,13 @@ def npz_to_csv(path):
     dataframe = pd.DataFrame({'RA': ra, 'DEC': dec, 'Z': z})
     dataframe.to_csv(out_csv, index=False)
     print(f"Saved {out_csv}")
+
+def dist_to_nearest_edge(dec_rad, ra_rad, dec_min_map,dec_max_map,ra_min_map,ra_max_map):
+    """Minimum angular distance [rad] from (dec, ra) to the map boundary."""
+    cos_dec = np.cos(dec_rad)
+    return np.minimum.reduce([
+        dec_max_map - dec_rad,          # to north edge
+        dec_rad   - dec_min_map,        # to south edge
+        cos_dec * (ra_max_map - ra_rad),  # to east edge
+        cos_dec * (ra_rad - ra_min_map),  # to west edge
+    ])
