@@ -7,4 +7,5 @@ __pycache__/*
 *.pyc
 *.out
 *.err
+*.h5
 */.ipynb_checkpoints/*
