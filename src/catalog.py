@@ -30,13 +30,13 @@ class Catalog(object):
         print(self.nObj)
         if ".csv" in self.pathInCatalog:
             header, data = utils.read_csv_with_header(self.pathInCatalog)
-            colnames = data.colnames
+            colnames = data.columns
         elif ".fits" in self.pathInCatalog:
-            data = Table(fitsio.read("/pscratch/sd/b/boryanah/kSZ_pairwise/LRG_cigale_masked.fits"))
+            data = Table(fitsio.read(self.pathInCatalog))
             colnames = data.colnames
             header = None
         else:
-            raise ValueError("File type must be csv, no other types yet implemented")
+            raise ValueError("File type must be csv or fits, no other types yet implemented")
         if self.nObj is None:
             self.nObj = len(data['RA'])
         # sky coordinates and redshift
@@ -112,6 +112,11 @@ class Catalog(object):
         if 'vR' in colnames:
             self.vR = data['vR'][sel] # 1 or -1
         self.hdr = header
+        # make sure everything is a simple numpy array
+        for attr in ['RA', 'DEC', 'Z', 'alpha', 'vR', 'x_asym', 'y_asym', 'e', 'nu']:
+            if getattr(self, attr) is not None:
+                setattr(self, attr, np.array(getattr(self, attr)))
+                
 
         
     

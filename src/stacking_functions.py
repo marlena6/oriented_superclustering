@@ -1,8 +1,11 @@
-from pixell import reproject, enmap, utils, enplot
+from pixell import reproject, enmap, utils, enplot, curvedsky as cs
 import numpy as np
 from scipy.interpolate import RectBivariateSpline
 import sys
 import matplotlib.pyplot as plt
+import os
+import healpy as hp
+import copy
 
 class Chunk:
     def __init__(self, RA, DEC, alpha=None, x_asym=None, y_asym=None, vR=None, velocity_stack=False):
@@ -49,7 +52,7 @@ def extractThumbnails(
     iChunk,
     geom,
     imap,
-    orient
+    orient='original'
 ):
     """Extract thumbnails for a chunk of objects from a catalog."""
     ra = iChunk.RA  # in deg
@@ -95,7 +98,8 @@ def stackChunk(
     rescale_1=None,
     rescale_2=None,
     angledef="CofDec",
-    thumbnails=None
+    thumbnails=None,
+    imask=None
 ):
     """Stack a chunk of objects from a catalog onto an image, with various orientation options.
 
@@ -336,3 +340,85 @@ def rescale_prof(prof_arr, r, base_r):
     prof_func = interp1d(r, prof_arr, axis=1)
     resized = prof_func(base_r)
     return resized
+
+def readmap(inmap_dict, kappa_filter_path="/global/cfs/projectdirs/act/www/dr6_lensing_v1/maps/baseline/kappa_filter_act_dr6_lensing_v1_baseline.txt",
+            base_geometry_path = "/global/cfs/projectdirs/act/www/dr6_nilc/ymaps_20230220/ilc_actplanck_ymap.fits"):
+    """
+    Checks to see if the map is an enamp, and converts from Healpix to Enmap otherwise.
+    Args:
+        inmap_dict (dict): map dictionary with path to the map file (Healpix or Enmap format), type
+    Returns:
+        outmap_dict (dict): map dictionary with path to the Enmap file, type
+        """
+    mappath = inmap_dict["path"]
+    outmap_dict = copy.deepcopy(inmap_dict)
+    if not os.path.exists(mappath):
+        raise ValueError(f"Map path {mappath} does not exist.")
+    
+    # figure out the format of the map: enmap, healpix, or alms
+    if mappath.endswith("fits"):
+        try:
+            shape, wcs = enmap.read_map_geometry(mappath) # quick geometry check which will fail if not an enmap
+            print("Map is already an enmap.")
+            outmap_dict["path"] = mappath
+        except Exception as e:
+            print("Map is not an enmap. Attempting to convert from healpix.")
+            enmap_path = mappath.replace(".fits", "_enmap.fits")
+            # Check if another map already exists with _enmap in the same directory
+            if os.path.exists(enmap_path):
+                print("Enmap version of map already exists at {enmap_path}. Using that.")
+                outmap_dict["path"] = enmap_path
+                if inmap_dict["type"] == 'kappa' and "filter" not in mappath:
+                    print("Filtering and reprojecting to enmap. This may take a while...")
+                    enmap_path = save_filtered_map(mappath, kappa_filter_path)
+            else: # make an enmap
+                shape, wcs = enmap.read_map_geometry(base_geometry_path) # use the geometry of the ACT ymap
+                hpmap = hp.read_map(mappath)
+                if inmap_dict["type"] == "kappa" and "filter" not in mappath:
+                    print("Filtering and reprojecting to enmap. This may take a while...")
+                    enmap_path = save_filtered_map(mappath, kappa_filter_path, shape=shape, wcs=wcs)
+                else:
+                    print("Reprojecting healpix map to enmap. This may take a while...")
+                    enmap_rp = reproject.healpix2map(hpmap, shape=shape, wcs=wcs, method='spline')
+                    enmap.write_map(enmap_path, enmap_rp)
+                    print(f"Saved enmap version to {enmap_path}.")
+            outmap_dict["path"] = enmap_path
+    elif mappath.endswith(".txt"):
+        print("Path to map is not a map yet. Assuming it is alms, and attempting to convert alms to map. Will apply ACT kappa almxfl filter.")
+        alms = enmap.read_alm(mappath)
+        alms = np.nan_to_num(alms, nan=0.0) # turn nans to zeros, they cause troubles
+        # use the geometry of the ACT ymap
+        shape,wcs = enmap.read_map_geometry(base_geometry_path)
+        filter = np.loadtxt(kappa_filter_path)
+        filtered_alms = hp.almxfl(alms, filter[:,1])
+        outmap = cs.alm2map(filtered_alms, enmap.empty(shape, wcs))
+        enmap_path = mappath.replace(".fits", "_filtered_enmap.fits")
+        enmap.write_map(enmap_path, outmap)
+        print("Kappa map written at", enmap_path)
+        # no nans
+        assert(not np.any(np.isnan(outmap))), "Error: NaNs found in the kappa map"
+        outmap_dict["path"] = enmap_path
+    return outmap_dict
+
+def save_filtered_map(map_path, filter_path, shape=None, wcs=None):
+    """ Filters a healpix or enmap map with a function and saves the result as an enmap.
+    Args:
+        map_path (str): Path to the input healpix or enmap map.
+        filter_path (str): Path to the filter function (text file with two columns: l and filter(l)).
+        shape (tuple): Shape of the output enmap.
+        wcs (WCS): WCS of the output enmap.
+    """
+    filter = np.loadtxt(filter_path)
+    if 'enmap' in map_path:
+        alms = enmap.map2alm(enmap.read_map(map_path))
+        outpath = map_path.replace(".fits", "_filtered.fits")
+        shape,wcs = enmap.read_map_geometry(map_path) # replace with the geometry of the input enmap
+    else:
+        alms = hp.map2alm(hp.read_map(map_path))
+        outpath = map_path.replace(".fits", "_enmap_filtered.fits")
+    
+    filter_kappa = hp.almxfl(alms, filter[:,1])
+    outmap = cs.alm2map(filter_kappa, enmap.empty(shape, wcs))
+    enmap.write_map(outpath, outmap)
+    print(f"Saved filtered kappa map to {outpath}.")
+    return outpath

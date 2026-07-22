@@ -1,14 +1,11 @@
 import sys
-# insert path 1 level up
-sys.path.insert(0, "/global/cfs/cdirs/act/data/mlokken/oriented_stacks/oriented_superclustering/")
-# sys.path.insert(0, "/global/homes/b/boryanah/repos/oriented_superclustering")
 import numpy as np
 from astropy.cosmology import Planck18 as cosmo
 import astropy.units as u
-from pixell import enmap, reproject, utils, curvedsky as cs
+from pixell import enmap, reproject, utils
 import catalog
 from kmeans_radec import kmeans_sample
-from stacking_functions import Chunk, stackChunk, StackGeometry, extractThumbnails
+from stacking_functions import Chunk, stackChunk, StackGeometry, extractThumbnails, readmap
 import h5py
 from pathlib import Path
 import os
@@ -19,8 +16,9 @@ import filecmp
 import matplotlib.pyplot as plt
 from astropy.coordinates import SkyCoord
 import time
-import healpy as hp
+import healpy as h
 from utils import dist_to_nearest_edge
+
 
 start = time.time()
 # Load config
@@ -44,8 +42,6 @@ else:
     rank = 0
     size = 1
 
-print("rank", rank, "passed barrier")
-
 restart_run = cfg["run"]["restart_run"]
 newdir_name = cfg["run"]["newdir_name"]
 test = cfg["run"]["test"]
@@ -64,7 +60,6 @@ if errors:
 else:
     nreg = 1
     assert size == 1, "MPI size must be 1 when errors are disabled."
-
 orient = cfg["analysis"]["orient"]
 cutout_rad = cfg["analysis"]["cutout_rad_mpc"] * u.Mpc
 dz_rescale = cfg["analysis"]["dz_rescale"]
@@ -81,7 +76,11 @@ if zmax in ["None","none",None, ""]:
     zmax = None
 basepath = cfg["paths"]["basepath"]
 orientfile = cfg["paths"]["orient_file"]
+maskfile_list = cfg["paths"]["mask_file_list"]
+inmap_info = cfg["map"]
+# multiple mask files can be entered. If multiple, try to multiply them together.
 savepath = os.path.join(basepath, newdir_name)
+
 
 # have rank 0 make the new directory, all others wait
 if rank == 0:
@@ -93,80 +92,39 @@ if rank == 0:
         print(f"Created directory {savepath} for this run.")
     if restart_run:
         print(f"Restarting run in existing directory {savepath}.")
+
+    inmap_info = readmap(inmap_info) # reads the map, filters / reprojects if necessary, modifies path in inmap_info if necessary
+    
+    if maskfile_list is None:
+        combined_mask = None
+    else:
+        for i, maskpath in enumerate(maskfile_list):
+            try:
+                mask = enmap.read_map(maskpath)
+                if i == 0:
+                    combined_mask = mask
+                else:
+                    combined_mask *= mask
+            except:
+                raise ValueError(f"Could not read mask file {maskpath}. Please ensure it is enmap format.")
+        # write mask to new file and delete
+        maskpath = os.path.join(savepath,"combined_mask.fits"), combined_mask
+        enmap.write_map(maskpath)
+        del combined_mask
+        
+        
 if use_mpi and size > 1:
     comm.Barrier()  # wait for rank 0 to finish making the directory
-
-map = cfg["map"]
-
-
-# check if each map is an enmap, and convert from healpix to enmap otherwise
-# does another map exist with _enmap in the same directory?
-if rank == 0:
-    mappath = map["path"]
-    if not os.path.exists(mappath):
-        raise ValueError(f"Map path {mappath} does not exist.")
-    if map["type"] == 'y':
-        try:
-            shape, wcs = enmap.read_map_geometry(mappath) # quick geometry check which will fail if not an enmap
-            print("Map is already an enmap.")
-        except Exception as e:
-            print("Map is not an enmap. Attempting to convert from healpix.")
-            enmap_path = mappath.replace(".fits", "_enmap.fits")
-            if os.path.exists(enmap_path):
-                print("Enmap version of map already exists at {enmap_path}. Using that.")
-                map["path"] = enmap_path
-            else:
-                import healpy as hp
-                # get the nside without loading the full healpix map
-                
-                hpmap = hp.read_map(mappath)
-                print("Reprojecting healpix map to enmap. This may take a while...")
-                shape,wcs = enmap.fullsky_geometry(res=1 * utils.arcmin,proj='car') # 1 arcmin pixels
-                enmap_rp = reproject.healpix2map(hpmap, shape=shape, wcs=wcs, method='spline')
-                enmap.write_map(enmap_path, enmap_rp)
-                print(f"Saved enmap version of to {enmap_path}.")
-            map["path"] = enmap_path
-    elif map["type"] == 'kappa':
-        try:
-            shape, wcs = enmap.read_map_geometry(mappath) # quick geometry check which will fail if not an enmap
-            print("Map is already an enmap.")
-            # if the map is from Flamingo but not yet filtered, filter it
-            if 'flam' in mappath and 'filter' not in mappath:
-                filter = np.loadtxt("/global/cfs/projectdirs/act/www/dr6_lensing_v1/maps/baseline/kappa_filter_act_dr6_lensing_v1_baseline.txt")
-                alms = hp.map2alm(hp.read_map(mappath))
-                filter_kappa = hp.almxfl(alms, filter[:,1])
-                kappamap = cs.alm2map(filter_kappa, enmap.empty(shape, wcs))
-                enmap_path = mappath.replace(".fits", "_filtered.fits")
-                enmap.write_map(enmap_path, kappamap)
-        except Exception as e:
-            print("Map is not an enmap. Attempting to convert alms to map.")
-            kappa = enmap.read_alm(mappath)
-            kappa = np.nan_to_num(kappa, nan=0.0) # turn nans to zeros, they are causing troubles
-            # use the geometry of the ACT ymap
-            shape,wcs = enmap.read_map_geometry("/global/cfs/projectdirs/act/www/dr6_nilc/ymaps_20230220/ilc_actplanck_ymap.fits")
-            filter = np.loadtxt("/global/cfs/projectdirs/act/www/dr6_lensing_v1/maps/baseline/kappa_filter_act_dr6_lensing_v1_baseline.txt")
-            filter_kappa = hp.almxfl(kappa, filter[:,1])
-            kappamap = cs.alm2map(filter_kappa, enmap.empty(shape, wcs))
-            enmap_path = mappath.replace(".fits", "_enmap.fits")
-            enmap_path = os.path.join(map["savemap_path"], os.path.basename(enmap_path))
-            enmap.write_map(enmap_path, kappamap)
-            print("Kappa map written at", enmap_path)
-            # no nans
-            assert(not np.any(np.isnan(kappamap))), "Error: NaNs found in the kappa map"
-            map["path"] = enmap_path
-        
-
-if use_mpi and size > 1:
     # make sure the mappaths are consistent in case they got changed in the previous step
     if rank==0:
-        mappath = map["path"]
+        mappath = inmap_info["path"]
     else:
         mappath = None
     path = comm.bcast(mappath, root=0)
-    map["path"] = path
+    inmap_info["path"] = path
 
 # make sure mappath updated
-mappath = map["path"]
+mappath = inmap_info["path"]
 print("mappath now", mappath)
 if not os.path.exists(mappath):
     raise ValueError(f"Map path {mappath} does not exist.")
@@ -211,9 +169,9 @@ assert zmin < zmax, f"zmin ({zmin}) must be less than zmax ({zmax})."
 assert zmin > 0, f"zmin ({zmin}) must be greater than 0."
 assert zmax < 2, f"zmax ({zmax}) must be less than 2."
 print(f"Redshift range to stack: {zmin:.3f} - {zmax:.3f}")
-print("Map entered:", map)
+print("Map entered:", inmap_info)
 outfile = (
-        f"{savepath}/{map['shortname']}_consol_stacks_z{zmin:.2f}_{zmax:.2f}_{Path(orientfile).stem}{teststr}.h5"
+        f"{savepath}/{inmap_info['shortname']}_consol_stacks_z{zmin:.2f}_{zmax:.2f}_{Path(orientfile).stem}{teststr}.h5"
     )
 
 # Make sure the output file doesn't already exist
@@ -313,8 +271,8 @@ if not os.path.exists(file_i):
             f.attrs["orientation_constraints"] = np.unique(cat.constraints).tolist()
             
     
-        mappath = map["path"]
-        sn = map["shortname"]
+        mappath = inmap_info["path"]
+        sn = inmap_info["shortname"]
         map_group = f.create_group(sn)
         map_group.attrs["map_path"] = mappath
         print(f"Handling input map: {mappath}")
@@ -325,6 +283,8 @@ if not os.path.exists(file_i):
             readmap_start = time.time()
             # read the whole map
             imap = enmap.read_map(mappath)
+            if maskfile_list is not None:
+                imask = enmap.read_map(maskpath)
             readmap_end = time.time()
             print(f"Read map in {readmap_end - readmap_start:.1f} seconds.")
             
@@ -362,13 +322,14 @@ if not os.path.exists(file_i):
                     )
                     
                 print(f"Reading chunk of map with bounds RA: [{lowra:.2f},{highra:.2f}], Dec: [{lowdec:.2f},{highdec:.2f}]")
-                imap = enmap.read_map(
-                    mappath,
-                    box=[
+                box = [
                         [np.radians(lowdec.value), np.radians(highra.value)],
                         [np.radians(highdec.value), np.radians(lowra.value)],
-                    ],
-                )
+                    ]
+                imap = enmap.read_map(mappath, box=box)
+                if maskfile_list is not None:
+                    imask = enmap.read_map(maskpath, box=box)
+
             # extract the points within the sky region
             alpha_inreg = cat.alpha[in_reg] if cat.alpha is not None else None
             x_asym_inreg = cat.x_asym[in_reg] if cat.x_asym is not None else None
@@ -401,6 +362,7 @@ if not os.path.exists(file_i):
                         edgecolor="white", linewidth=0.6, alpha=0.85)
                 plt.savefig(f"{savepath}/region_{n}_local_diffs.png")
             
+            
             # extract all the thumbnails for this region that have ok distances
             alpha_inreg = alpha_inreg[edge_ok] if cat.alpha is not None else None
             x_asym_inreg = x_asym_inreg[edge_ok] if cat.x_asym is not None else None
@@ -408,7 +370,7 @@ if not os.path.exists(file_i):
             ra_inreg = ra_inreg[edge_ok]
             dec_inreg = dec_inreg[edge_ok]
             z_inreg = z_inreg[edge_ok]
-            vr_inreg = vr_inreg[edge_ok]
+            vr_inreg = vr_inreg[edge_ok] if cat.vR is not None else None
             
             diff_lowra_inreg= (ra_inreg - lowra.value)
             diff_highra_inreg = (highra.value-ra_inreg )
@@ -425,13 +387,23 @@ if not os.path.exists(file_i):
 
             chunkObj_reg = Chunk(
                     ra_inreg,
-                    dec_inreg,
-                    alpha_inreg,
-                    x_asym_inreg,
-                    y_asym_inreg,
-                    vr_inreg - np.mean(vr_inreg) # B.H.
+                    dec_inreg
                 )
+            # now check for masked regions within thumbnails
+            print("Checking mask...")
+            if combined_mask is not None:
+                mask_thumbs = extractThumbnails(
+                chunkObj_reg,
+                geom,
+                imask
+            )
+                good = np.ones(len(mask_thumbs)).astype(bool)
+                for i,thumb in enumerate(mask_thumbs):
+                    if np.mean(thumb)<1:
+                        good[i] = False
+            # update chunkObj_reg here
             thumbs_time = time.time()
+            
             thumbs = extractThumbnails(
                 chunkObj_reg,
                 geom,
@@ -472,7 +444,7 @@ if not os.path.exists(file_i):
                 else:
                     y_asym_inreg_inz = None
                 if vr_inreg is not None:
-                    vr_inreg_inz = vr_inreg[inz]
+                    vr_inreg_inz = vr_inreg[inz] - np.mean(vr_inreg[inz])
                 else:
                     vr_inreg_inz = None
                 chunkObj = Chunk( # B.H.
@@ -481,7 +453,7 @@ if not os.path.exists(file_i):
                     alpha_inreg_inz,
                     x_asym_inreg_inz,
                     y_asym_inreg_inz,
-                    vr_inreg_inz - np.mean(vr_inreg_inz)
+                    vr_inreg_inz
                 )
                 
                 if chunkObj.nObj == 0:
@@ -501,7 +473,7 @@ if not os.path.exists(file_i):
                         orient=orient,
                         rescale_1=phys_rescale_factor,
                         rescale_2=comov_rescale_factor,
-                        thumbnails=thumbs_inz 
+                        thumbnails=thumbs_inz
                     )
                 # save to this delta-z subgroup
                 z_group.attrs["Nobj"] = chunkObj.nObj

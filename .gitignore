@@ -9,3 +9,5 @@ __pycache__/*
 *.err
 *.h5
 */.ipynb_checkpoints/*
+*.egg-info/
+src/oriented_superclustering.egg-info/PKG-INFO

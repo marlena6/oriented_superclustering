@@ -7,33 +7,31 @@ import healpy as hp
 import astropy.units as u
 
 def get_radecz(filepath, return_id=False, return_weight=False):
-    print(filepath)
-    if "desi" in filepath and "flam" not in filepath: # DESI LRG file
-        print("DESI LRG catalog entered.")
+    print("Catalog entered:", filepath)
+    if filepath.endswith("fits"):
         hdu = fits.open(filepath)
-        dat = hdu[1].data
+        data = hdu[1].data
+        keys = hdu[1].header
         hdu.close()
-        ra  = dat['RA']
-        dec = dat['DEC']
-        z   = dat['Z']
-        id  = dat['TARGETID']
-        try:
-            w   = dat['WEIGHT']
-        except:
-            w = dat['w']
-    elif "flam" in filepath:
-        print("Flamingo catalog entered.")
-        with np.load(filepath) as data:
-            ra = data['ra']
-            dec = data['dec']
-            z  = data['z']
-            if 'sub_idx' in data.keys():
-                id = data['sub_idx']
-            else:
-                id = np.arange(len(ra))
-            w  = np.ones(len(ra))
+    elif filepath.endswith(".npy") or filepath.endswith(".npz"):
+        data = np.load(filepath)
+        keys = dat.keys()
     else:
-        print("unrecognized file format")
+        print("Unrecognized file format of catalog data.")
+    ra = data['ra']
+    dec = data['dec']
+    z  = data['z']
+    if 'sub_idx' in keys:
+        id = data['sub_idx']
+    elif 'TARGETID' in keys:
+        id = data['TARGETID']
+    else:
+        id = np.arange(len(ra))
+    if 'WEIGHT' in keys:
+        w   = dat['WEIGHT']
+    else:
+        w  = np.ones(len(ra))
+    
     to_return = [ra,dec,z]
     if return_id:
         to_return.append(id)

@@ -5,7 +5,6 @@ from astropy.cosmology import Planck18 as cosmo, z_at_value
 import time
 import healpy as hp
 import sys
-sys.path.insert(0, "/global/cfs/cdirs/act/data/mlokken/oriented_stacks/oriented_superclustering/")
 import select_and_orient as sao
 import yaml
 import pandas as pd
@@ -75,7 +74,7 @@ if os.path.exists(save_file):
     raise ValueError(f"Output file {save_file} already exists. Please change the save_path or delete the existing file to avoid overwriting.")
 else:
     print("Will save output to", save_file)
-
+mask = None
 if maskfile is not None:
     mask = hp.read_map(maskfile)
 zlist_tot = None
@@ -361,7 +360,7 @@ for i in range(len(zlist_tot)):
     smth_arcmin = (cosmo.arcsec_per_kpc_comoving(z_mid) * (smth*u.Mpc)).to(u.arcmin).value
     if randoms_catalog is not None:
         odmap, mask = sao.delta_g(nside, ra_oo_bin, dec_oo_bin, ra_rand=ra_rand_bin, dec_rand=dec_rand_bin, catalog_weights=w_oo_bin, randoms_weights=w_rand_bin, smth=smth_arcmin)
-    elif maskfile is not None:
+    else:
         odmap = sao.delta_g(nside, ra_oo_bin, dec_oo_bin, catalog_weights=w_oo_bin, mask=mask, smth=smth_arcmin)
     
     
@@ -456,7 +455,7 @@ if size>1:
 
 # only rank 0 writes to file
 if rank==0:
-    df = pd.DataFrame({'RA':ra_all, 'DEC':dec_all, 'Z':z_all, 'alpha':alpha_all, 'x_asym':xpol_all, 'y_asym':ypol_all, 'e':e_all, 'nu':nu_all, 'config':os.path.basename(config_file_path).replace('.yaml','')})
+    df = pd.DataFrame({'RA':ra_all, 'DEC':dec_all, 'Z':z_all, 'alpha':alpha_all, 'x_asym':xpol_all, 'y_asym':ypol_all, 'e':e_all, 'nu':nu_all})
     df.to_csv(save_file, index=False)
     
 print(f"Final time: {time.time() - start:.2f} seconds.")
