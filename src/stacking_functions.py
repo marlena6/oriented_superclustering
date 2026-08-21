@@ -93,13 +93,15 @@ def extractThumbnails(
 def stackChunk(
     iChunk,
     geom,
-    imap,
     orient,
+    imap=None,
     rescale_1=None,
     rescale_2=None,
     angledef="CofDec",
     thumbnails=None,
-    imask=None
+    imask=None,
+    thumbnails_mask=None,
+    mask_by="full_mask"
 ):
     """Stack a chunk of objects from a catalog onto an image, with various orientation options.
 
@@ -113,6 +115,7 @@ def stackChunk(
         rescale_2 (float, optional): Scale factor for second rescaled output.
         angledef (str, optional): Which direction & axis the orientation is defined with respect to.
             Defaults to 'CCofRA' (counter clockwise of RA). Other option is 'CofDec' (clockwise of Dec).
+        mask_by: "full_mask" or "thumbs"
 
     Returns:
         pixell.enmap or tuple: Stacked image, optionally with rescaled versions.
@@ -127,7 +130,8 @@ def stackChunk(
         )
     if rescale_2 is not None and rescale_1 is None:
         sys.exit("If rescale_2 is specified, rescale_1 must also be specified.")
-    
+    if imap is None and thumbnails is None:
+        sys.exit("Either imap or thumbnails must be provided.")
     
     thumb_shape, thumb_wcs = geom.shape, geom.wcs
     # get the thumbnails
@@ -168,7 +172,17 @@ def stackChunk(
     dec = iChunk.DEC  # in deg
     # extract postage stamps around the objects. Need them to be larger than the cutout size (I think?)
     # print("before all thumbs")
-    
+    if mask_by == "thumbs" and thumbnails_mask is None and imask is not None:
+        # get the thumbnail mask for each object in the chunk
+        thumbnails_mask = reproject.thumbnails(
+            imask,
+            coords=np.deg2rad([dec, ra]).T,
+            res=geom.cutout_resolution_deg * utils.degree,
+            r=geom.cutout_rad_deg * utils.degree,
+            method="spline",
+            order=1,
+        )
+        
     if orient == "original":
         if thumbnails is not None:
             thumbs = thumbnails
@@ -194,7 +208,7 @@ def stackChunk(
                 r=geom.cutout_rad_deg * utils.degree + 0.2 * utils.degree,
                 method="spline",
                 order=1,
-            ) 
+            )
     
     # print("after all thumbs")
     # print(f"found {thumbs.shape[0]} thumbnails out of {iChunk.nObj} objects")
@@ -218,12 +232,26 @@ def stackChunk(
     Y_lrg = ipos_lrg[1][:, ::-1]  # flipping the order for use in scipy later
     x_lrg, y_lrg = X_lrg[:, 0], Y_lrg[0, :]
 
+    # masking option 1: use full mask
+    full_sample = np.ones(iChunk.nObj, dtype=bool)
+    if mask_by=="full_mask" and imask is not None:
+        # extract map values at ra,dec
+        val = enmap.at(imask, [dec, ra], mode="nn")
+        full_sample = val > 0.9
+    
+    nstacked = 0
     for iObj in range(iChunk.nObj):
-        # if ts.overlapFlag[iObj]: # Re-implement this later
-
+        if not full_sample[iObj]:
+            continue
+        
+        # option 2 for masking: use thunmbnails
+        if mask_by=="thumbs":
+            if np.mean(thumbnails_mask[iObj]) < 0.95: # if anything is masked
+                continue
         
         if orient == "original":
             resMap += thumbs[iObj]
+            nstacked += 1
         else:
             if orient == "random":  # random orientation angles
                 alpha = np.random.rand() * 2.0 * np.pi
@@ -267,8 +295,9 @@ def stackChunk(
             # plt.show()
             del X_rot, Y_rot
             resMap += stampMap
+            nstacked += 1
 
-    resMap = resMap / iChunk.nObj
+    resMap = resMap / nstacked
     nreturn = 1
     # rescale if desired
     if rescale_1 is not None:
@@ -289,15 +318,6 @@ def stackChunk(
         return (resMap, resMap1)
     elif nreturn == 3:
         return (resMap, resMap1, resMap2)
-
-    # # dispatch each chunk of objects to a different processor
-    # with sharedmem.MapReduce(np=ts.nProc) as pool:
-    # resMap = np.array(pool.map(stackChunk, list(range(nChunk))))
-
-    # # sum all the chunks
-    # resMap = np.sum(resMap, axis=0)
-    # # normalize by the proper sum of weights
-    # resMap *= norm
 
 
 def rescale_img(img, base_sidelen, ratio_to_base):

@@ -6,7 +6,7 @@ import gc
 import healpy as hp
 import astropy.units as u
 
-def get_radecz(filepath, return_id=False, return_weight=False):
+def get_radecz(filepath, return_id=False, return_weight=False, return_v=False):
     print("Catalog entered:", filepath)
     if filepath.endswith("fits"):
         hdu = fits.open(filepath)
@@ -15,7 +15,7 @@ def get_radecz(filepath, return_id=False, return_weight=False):
         hdu.close()
     elif filepath.endswith(".npy") or filepath.endswith(".npz"):
         data = np.load(filepath)
-        keys = dat.keys()
+        keys = data.keys()
     else:
         print("Unrecognized file format of catalog data.")
     ra = data['ra']
@@ -28,15 +28,22 @@ def get_radecz(filepath, return_id=False, return_weight=False):
     else:
         id = np.arange(len(ra))
     if 'WEIGHT' in keys:
-        w   = dat['WEIGHT']
+        w   = data['WEIGHT']
     else:
         w  = np.ones(len(ra))
-    
+    if 'V' in keys:
+        v  = data['V']
+    else:
+        v  = np.ones(len(ra))
     to_return = [ra,dec,z]
     if return_id:
         to_return.append(id)
     if return_weight:
         to_return.append(w)
+    if return_v:
+        if np.all(v==1):
+            print("Warning: No V values found in catalog. Returning ones.")
+        to_return.append(v)
     return to_return
 
 def delta_g(nside, ra, dec, ra_rand=None, dec_rand=None, catalog_weights=None, randoms_weights=None, mask=None, smth=60): # smoothing scale in arcsec
@@ -55,14 +62,18 @@ def delta_g(nside, ra, dec, ra_rand=None, dec_rand=None, catalog_weights=None, r
     '''
     import healpy as hp
     threshold=1e-5
+
+    assert len(ra)>0, "No objects in catalog."
+
     if catalog_weights is None:
        catalog_weights = np.ones_like(ra)
     if randoms_weights is None:
        randoms_weights = np.ones_like(ra_rand)
-        
+    
     data_map   = np.zeros((hp.nside2npix(nside)))
     pix = hp.ang2pix(nside, ra, dec, lonlat=True)
     np.add.at(data_map, pix, catalog_weights)
+    assert np.sum(data_map)>0, "Data map is empty. Check your catalog."
     if ra_rand is None or dec_rand is None:
         print("No randoms provided.")
         if mask is not None:
@@ -80,10 +91,12 @@ def delta_g(nside, ra, dec, ra_rand=None, dec_rand=None, catalog_weights=None, r
             delta_map *= mask # set masked pixels to zero to get rid of bleeding over edges
         return delta_map
     else:
+        assert len(ra_rand)>0, "No objects in randoms catalog."
         rand_map = np.zeros((hp.nside2npix(nside)))
         rand_pix = hp.ang2pix(nside, ra_rand, dec_rand, lonlat=True)
         np.add.at(rand_map, rand_pix, randoms_weights)
         # print("sum data", np.sum(data_map), "sum rand", np.sum(rand_map))
+        assert np.sum(rand_map)>0, "Randoms map is empty. Check your randoms catalog."
         alpha = np.sum(catalog_weights)/np.sum(randoms_weights)
         print("alpha is", alpha)
 
@@ -120,7 +133,7 @@ def ThetaPhitoRaDec(theta,phi,negative_ras=False):
     return ra,dec
 
 def dlist(cosmo, minz=None, maxz=None, slice_width=None, offset=0, zlist=None, dlist=None):
-    if zlist is None and minz and dlist is None:
+    if zlist is None and minz is None and dlist is None:
         sys.exit("Need to input one of either zbins, minz, dlist.")
     if zlist is not None:
         dlist = []
@@ -139,7 +152,7 @@ def dlist(cosmo, minz=None, maxz=None, slice_width=None, offset=0, zlist=None, d
             dist_slice_max = dist_slice_min + slice_width*u.megaparsec
             dlist.append([int(dist_slice_min.value), int(dist_slice_max.value)])
         zlist = z_at_value(cosmo.comoving_distance, [d[0]*u.Mpc for d in dlist]).value
-    return dlist, zlist
+    return np.asarray(dlist), np.asarray(zlist)
 
 def overdensity_to_potential(overdensity_map_alms, nside):
     # ell filter
@@ -233,6 +246,7 @@ def measure_orientation_QU(ra, dec, overdensity_map, mode='density', compute_xy_
         grad_alpha_x = np.cos(alpha[pix])*Vphi[pix] - np.sin(alpha[pix])*Vtheta[pix]
         x_pol[grad_alpha_x>0] = -1
         grad_alpha_y = np.cos(alpha[pix])*Vtheta[pix] + np.sin(alpha[pix])*Vphi[pix]
+        print("grad_alpha_y:", np.min(grad_alpha_y), np.max(grad_alpha_y),np.mean(grad_alpha_y < 0))
         y_pol[grad_alpha_y<0] = -1
     
     # if(hmap_sym%map(i, 2)*cos(arr(3))-hmap_sym%map(i,1)*sin(arr(3)) .gt. 0.d0 .and. this%xup)then

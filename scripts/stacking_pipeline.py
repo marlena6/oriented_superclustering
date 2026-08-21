@@ -69,6 +69,8 @@ nu_min = cfg["analysis"]["nu_min"]
 nu_max = cfg["analysis"]["nu_max"]
 e_min = cfg["analysis"]["e_min"]
 e_max = cfg["analysis"]["e_max"]
+avoid_mask_by = cfg["analysis"]["avoid_mask_by"] # degrees from which to avoid mask edges
+mask_with = cfg["analysis"]["mask_with"]
 
 if zmin in ["None","none",None, ""]:
     zmin = None
@@ -95,22 +97,7 @@ if rank == 0:
 
     inmap_info = readmap(inmap_info) # reads the map, filters / reprojects if necessary, modifies path in inmap_info if necessary
     
-    if maskfile_list is None:
-        combined_mask = None
-    else:
-        for i, maskpath in enumerate(maskfile_list):
-            try:
-                mask = enmap.read_map(maskpath)
-                if i == 0:
-                    combined_mask = mask
-                else:
-                    combined_mask *= mask
-            except:
-                raise ValueError(f"Could not read mask file {maskpath}. Please ensure it is enmap format.")
-        # write mask to new file and delete
-        maskpath = os.path.join(savepath,"combined_mask.fits"), combined_mask
-        enmap.write_map(maskpath)
-        del combined_mask
+    
         
         
 if use_mpi and size > 1:
@@ -153,17 +140,16 @@ if rank == 0:
 config = {'nu_min':nu_min, 'nu_max':nu_max, 'e_min':e_min, 'e_max':e_max}
 # every rank reads -- initially had this different but finding issues with broadcasting object on NERSC
 cat = catalog.Catalog(
-    name="standard",
     pathInCatalog=orientfile,
     nObj=nObj,
     config=config
 )
-print(f"Rank {rank} read the catalog with {len(cat.Z)} objects.")
+print(f"Rank {rank} read the catalog with {len(cat.z)} objects.")
 if zmin is None:
-    zmin = np.amin(cat.Z)
+    zmin = np.amin(cat.z)
     print(f"zmin not provided. Using minimum redshift in catalog: {zmin:.3f}")
 if zmax is None:
-    zmax = np.amax(cat.Z)
+    zmax = np.amax(cat.z)
 # make sure the redshift range is reasonable
 assert zmin < zmax, f"zmin ({zmin}) must be less than zmax ({zmax})."
 assert zmin > 0, f"zmin ({zmin}) must be greater than 0."
@@ -193,13 +179,13 @@ if errors:
         print(f"Read region labels from {labels_file}")
     else:
         if rank == 0:
-            km = kmeans_sample(np.vstack((cat.RA, cat.DEC)).T, nreg, maxiter=100, tol=1.0e-5)
+            km = kmeans_sample(np.vstack((cat.ra, cat.dec)).T, nreg, maxiter=100, tol=1.0e-5)
             labels = km.labels.astype(np.int64)
             np.savetxt(labels_file, labels, fmt="%d")
             print(f"Saved region labels to {labels_file}")
             colors = ['C'+str(i) for i in range(10)]
-            rands  = np.random.choice(np.arange(len(cat.RA)), size=1000, replace=False)
-            plt.scatter(cat.RA[rands], cat.DEC[rands], c=[colors[l%10] for l in labels[rands]], s=5)
+            rands  = np.random.choice(np.arange(len(cat.ra)), size=1000, replace=False)
+            plt.scatter(cat.ra[rands], cat.dec[rands], c=[colors[l%10] for l in labels[rands]], s=5)
             plt.legend(handles=[plt.Line2D([0], [0], marker='o', color='w', label=f'Region {i}', markerfacecolor=colors[i%10], markersize=5) for i in range(nreg)],loc='best')
             plt.savefig(f"{savepath}/region_splits.png")
             plt.clf()
@@ -211,7 +197,7 @@ if errors:
     cat.labels = labels  # add labels to the Catalog object
     print(f"Rank {rank} has labels with unique values: {np.unique(labels)}")
 else:
-    cat.labels = np.zeros(len(cat.RA), dtype=np.int64) # they are all region '0'
+    cat.labels = np.zeros(len(cat.ra), dtype=np.int64) # they are all region '0'
     
 
 # if the unit of cutout_rad is Mpc, then we need to convert it to degrees
@@ -233,6 +219,39 @@ else:
     raise ValueError(
         "cutout_rad must be in units of Mpc, degrees, arcminutes, or arcseconds"
     )
+maskpath=None
+if rank==0:
+    if maskfile_list is not None:
+        print("Found masks")
+        if len(maskfile_list)==1 and "shrunk" in maskfile_list[0]:
+            maskpath = maskfile_list[0]
+        else:
+            for i, maskpath in enumerate(maskfile_list):
+                try:
+                    mask = enmap.read_map(maskpath)
+                    if i == 0:
+                        combined_mask = mask
+                    else:
+                        combined_mask *= mask
+                except Exception as e:
+                    raise ValueError(f"Could not read mask file {maskpath}. Please ensure it is enmap format.") from e
+
+            # shrink the True part of the mask the amount given, or by size of the cutouts
+            print("Shrinking mask...")
+            if avoid_mask_by is not None:
+                combined_mask = enmap.shrink_mask(combined_mask, avoid_mask_by.to(u.rad).value)
+            else:
+                combined_mask = enmap.shrink_mask(combined_mask, cutout_rad_deg.to(u.rad).value)
+            # write mask to new file and delete
+            maskpath = os.path.join(savepath,"combined_mask.fits")
+            # Ensure FITS-compatible binary mask
+            combined_mask = (combined_mask > 0).astype(np.uint8)
+            enmap.write_map(maskpath, combined_mask) # error here ML
+            print("Combined mask written to", maskpath)
+            del combined_mask
+        # share new maskpath with the other ranks
+if use_mpi and size > 1:
+    maskpath = comm.bcast(maskpath, root=0)
 
 cutout_resolution_deg = (0.5 * u.arcmin).to(u.deg)
 print(
@@ -266,7 +285,8 @@ if not os.path.exists(file_i):
         f.attrs["cutout_rad_cMpc"] = cutout_rad_deg * Mpc_per_deg_comov_base.value
         f.attrs["cutout_rad_pMpc"] = cutout_rad_deg * Mpc_per_deg_phys_base.value
         if cat.hdr is not None:
-            f.attrs["orientation_constraints"] = cat.hdr
+            print("Header of input catalog:", cat.hdr)
+            f.attrs["orientation_constraints"] = "\n".join(cat.hdr.tolist())
         elif cat.constraints is not None:
             f.attrs["orientation_constraints"] = np.unique(cat.constraints).tolist()
             
@@ -300,7 +320,7 @@ if not os.path.exists(file_i):
             reg_group.attrs["Region"] = n
             print(f"Analyzing region {n}")
             # define the map edges for this region
-            sc = SkyCoord(ra=cat.RA[in_reg]*u.deg, dec=cat.DEC[in_reg]*u.deg, frame="icrs")
+            sc = SkyCoord(ra=cat.ra[in_reg]*u.deg, dec=cat.dec[in_reg]*u.deg, frame="icrs")
             ra_wrapped = sc.ra.wrap_at(180*u.deg)
             lowra, highra = (
                 ra_wrapped.min() - (cutout_rad_deg+0.5*u.deg),
@@ -312,7 +332,7 @@ if not os.path.exists(file_i):
             )
             
             if size > 1:
-                # check for region crossing the RA = 180 deg line
+                # check for region crossing the ra = 180 deg line
                 if abs(highra - lowra) > 180*u.deg:
                     print(f"Region {n} crosses RA=180 deg line. Adjusting bounds.")
                     ra_wrapped[ra_wrapped < 0*u.deg] += 360*u.deg
@@ -332,13 +352,13 @@ if not os.path.exists(file_i):
 
             # extract the points within the sky region
             alpha_inreg = cat.alpha[in_reg] if cat.alpha is not None else None
-            x_asym_inreg = cat.x_asym[in_reg] if cat.x_asym is not None else None
-            y_asym_inreg = cat.y_asym[in_reg] if cat.y_asym is not None else None
+            x_pol_inreg = cat.x_pol[in_reg] if cat.x_pol is not None else None
+            y_pol_inreg = cat.y_pol[in_reg] if cat.y_pol is not None else None
             ra_inreg = ra_wrapped.degree
-            dec_inreg = cat.DEC[in_reg]
-            z_inreg = cat.Z[in_reg]
+            dec_inreg = cat.dec[in_reg]
+            z_inreg = cat.z[in_reg]
             # B.H.
-            vr_inreg = cat.vR[in_reg] if cat.vR is not None else None
+            vr_inreg = cat.vr[in_reg] if cat.vr is not None else None
 
             ## Distance computed
             dist_imap = dist_to_nearest_edge(np.radians(dec_inreg), np.radians(ra_inreg), np.radians(lowdec.value), np.radians(highdec.value), np.radians(lowra.value), np.radians(highra.value))
@@ -349,9 +369,10 @@ if not os.path.exists(file_i):
 
             edge_ok  = dist_imap >= min_safe_dist_rad #RH checking all distances
             bad = ~edge_ok
-            print("Failed RAs:", ra_inreg[bad][:10])
-            print("Failed Decs:", dec_inreg[bad][:10])
-            print("Failed distances:", np.degrees(dist_imap[bad][:10]))
+            if ra_inreg[bad].size > 0:
+                print("Failed RAs:", ra_inreg[bad][:10])
+                print("Failed Decs:", dec_inreg[bad][:10])
+                print("Failed distances:", np.degrees(dist_imap[bad][:10]))
             n_total  = len(dist_imap)
             n_pass   = int(edge_ok.sum())
             n_fail   = n_total - n_pass
@@ -365,12 +386,12 @@ if not os.path.exists(file_i):
             
             # extract all the thumbnails for this region that have ok distances
             alpha_inreg = alpha_inreg[edge_ok] if cat.alpha is not None else None
-            x_asym_inreg = x_asym_inreg[edge_ok] if cat.x_asym is not None else None
-            y_asym_inreg = y_asym_inreg[edge_ok] if cat.y_asym is not None else None
+            x_pol_inreg = x_pol_inreg[edge_ok] if cat.x_pol is not None else None
+            y_pol_inreg = y_pol_inreg[edge_ok] if cat.y_pol is not None else None
             ra_inreg = ra_inreg[edge_ok]
             dec_inreg = dec_inreg[edge_ok]
             z_inreg = z_inreg[edge_ok]
-            vr_inreg = vr_inreg[edge_ok] if cat.vR is not None else None
+            vr_inreg = vr_inreg[edge_ok] if cat.vr is not None else None
             
             diff_lowra_inreg= (ra_inreg - lowra.value)
             diff_highra_inreg = (highra.value-ra_inreg )
@@ -390,18 +411,15 @@ if not os.path.exists(file_i):
                     dec_inreg
                 )
             # now check for masked regions within thumbnails
-            print("Checking mask...")
-            if combined_mask is not None:
+            
+            if mask_with == 'thumbs' and maskfile_list is not None:
+                print("Checking mask...")
                 mask_thumbs = extractThumbnails(
                 chunkObj_reg,
                 geom,
                 imask
             )
-                good = np.ones(len(mask_thumbs)).astype(bool)
-                for i,thumb in enumerate(mask_thumbs):
-                    if np.mean(thumb)<1:
-                        good[i] = False
-            # update chunkObj_reg here
+                
             thumbs_time = time.time()
             
             thumbs = extractThumbnails(
@@ -428,21 +446,21 @@ if not os.path.exists(file_i):
                 inz = (z_inreg < (z_array[i+1])) & (z_inreg > (z_array[i]))
                 z_rescale_str = f"z_{z_array[i]:.2f}_{z_array[i+1]:.2f}"
                 z_group = reg_group.create_group(z_rescale_str)  # create a subgroup
-                print("Creating z group for z range", z_array[i], "-", z_array[i+1], "with", inz.sum(), "objects.")
+                print(f"Creating z group for z range {z_array[i]:.2f}-{z_array[i+1]:.2f} with {inz.sum()} objects.")
                 # make the ChunkObj for these z
                 
                 if alpha_inreg is not None:
                     alpha_inreg_inz = alpha_inreg[inz]
                 else:
                     alpha_inreg_inz = None
-                if x_asym_inreg is not None:
-                    x_asym_inreg_inz = x_asym_inreg[inz]
+                if x_pol_inreg is not None:
+                    x_pol_inreg_inz = x_pol_inreg[inz]
                 else:
-                    x_asym_inreg_inz = None
-                if y_asym_inreg is not None:
-                    y_asym_inreg_inz = y_asym_inreg[inz]
+                    x_pol_inreg_inz = None
+                if y_pol_inreg is not None:
+                    y_pol_inreg_inz = y_pol_inreg[inz]
                 else:
-                    y_asym_inreg_inz = None
+                    y_pol_inreg_inz = None
                 if vr_inreg is not None:
                     vr_inreg_inz = vr_inreg[inz] - np.mean(vr_inreg[inz])
                 else:
@@ -451,8 +469,8 @@ if not os.path.exists(file_i):
                     ra_inreg[inz],
                     dec_inreg[inz],
                     alpha_inreg_inz,
-                    x_asym_inreg_inz,
-                    y_asym_inreg_inz,
+                    x_pol_inreg_inz,
+                    y_pol_inreg_inz,
                     vr_inreg_inz
                 )
                 
@@ -466,15 +484,41 @@ if not os.path.exists(file_i):
                     thumbs_inz = thumbs[inz]
                     # get the stack
                     print("Stacking region", n, "at z", z)
-                    stack_n, stack_n_phys, stack_n_comov = stackChunk(
-                        chunkObj,
-                        geom,
-                        imap,
-                        orient=orient,
-                        rescale_1=phys_rescale_factor,
-                        rescale_2=comov_rescale_factor,
-                        thumbnails=thumbs_inz
-                    )
+                    if maskfile_list is not None:
+                        if mask_with=='thumbs':
+                            stack_n, stack_n_phys, stack_n_comov = stackChunk(
+                                chunkObj,
+                                geom,
+                                imap=imap,
+                                orient=orient,
+                                rescale_1=phys_rescale_factor,
+                                rescale_2=comov_rescale_factor,
+                                thumbnails=thumbs_inz,
+                                thumbnails_mask=mask_thumbs[inz],
+                                mask_by="thumbs"
+                            )
+                        elif mask_with=='fullmask':
+                            stack_n, stack_n_phys, stack_n_comov = stackChunk(
+                                chunkObj,
+                                geom,
+                                imap=imap,
+                                imask=imask,
+                                orient=orient,
+                                rescale_1=phys_rescale_factor,
+                                rescale_2=comov_rescale_factor,
+                                thumbnails=thumbs_inz,
+                                mask_by="full_mask"
+                            )
+                    else: # no masking
+                        stack_n, stack_n_phys, stack_n_comov = stackChunk(
+                            chunkObj,
+                            geom,
+                            imap=imap,
+                            orient=orient,
+                            rescale_1=phys_rescale_factor,
+                            rescale_2=comov_rescale_factor,
+                            thumbnails=thumbs_inz,
+                        )
                 # save to this delta-z subgroup
                 z_group.attrs["Nobj"] = chunkObj.nObj
                 z_group.create_dataset("stack_deg", data=stack_n)
