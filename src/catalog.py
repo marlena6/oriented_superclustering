@@ -3,6 +3,7 @@ import numpy as np
 from astropy.table import Table, column
 import fitsio
 import copy
+from pixell import enmap
 ##################################################################################
 ##################################################################################
 
@@ -264,7 +265,13 @@ class Catalog(object):
             if value is not None:
                 setattr(self, attr, value[sorted_indices])
 
-    def mask_catalog(self, mask, threshold=0.9):
+    def mask_catalog(self, imask, threshold=0.9):
         """ Use an enmap to reduce the catalog
         to only sources which overlap with where the mask > threshold."""
         
+        # extract map values at ra,dec
+        val = enmap.at(imask, np.deg2rad([self.dec, self.ra]), mode="nn")
+        full_sample = val > threshold
+        for attr in ['ra', 'dec', 'z', 'alpha', 'vr', 'x_pol', 'y_pol', 'e', 'nu', 'w', 'id']:
+            if attr in self.__dict__.keys():
+                setattr(self, attr, getattr(self, attr)[full_sample])

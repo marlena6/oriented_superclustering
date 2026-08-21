@@ -98,10 +98,7 @@ def stackChunk(
     rescale_1=None,
     rescale_2=None,
     angledef="CofDec",
-    thumbnails=None,
-    imask=None,
-    thumbnails_mask=None,
-    mask_by="full_mask"
+    thumbnails=None
 ):
     """Stack a chunk of objects from a catalog onto an image, with various orientation options.
 
@@ -172,16 +169,6 @@ def stackChunk(
     dec = iChunk.DEC  # in deg
     # extract postage stamps around the objects. Need them to be larger than the cutout size (I think?)
     # print("before all thumbs")
-    if mask_by == "thumbs" and thumbnails_mask is None and imask is not None:
-        # get the thumbnail mask for each object in the chunk
-        thumbnails_mask = reproject.thumbnails(
-            imask,
-            coords=np.deg2rad([dec, ra]).T,
-            res=geom.cutout_resolution_deg * utils.degree,
-            r=geom.cutout_rad_deg * utils.degree,
-            method="spline",
-            order=1,
-        )
         
     if orient == "original":
         if thumbnails is not None:
@@ -232,26 +219,11 @@ def stackChunk(
     Y_lrg = ipos_lrg[1][:, ::-1]  # flipping the order for use in scipy later
     x_lrg, y_lrg = X_lrg[:, 0], Y_lrg[0, :]
 
-    # masking option 1: use full mask
-    full_sample = np.ones(iChunk.nObj, dtype=bool)
-    if mask_by=="full_mask" and imask is not None:
-        # extract map values at ra,dec
-        val = enmap.at(imask, [dec, ra], mode="nn")
-        full_sample = val > 0.9
     
-    nstacked = 0
     for iObj in range(iChunk.nObj):
-        if not full_sample[iObj]:
-            continue
-        
-        # option 2 for masking: use thunmbnails
-        if mask_by=="thumbs":
-            if np.mean(thumbnails_mask[iObj]) < 0.95: # if anything is masked
-                continue
         
         if orient == "original":
             resMap += thumbs[iObj]
-            nstacked += 1
         else:
             if orient == "random":  # random orientation angles
                 alpha = np.random.rand() * 2.0 * np.pi
@@ -295,9 +267,8 @@ def stackChunk(
             # plt.show()
             del X_rot, Y_rot
             resMap += stampMap
-            nstacked += 1
 
-    resMap = resMap / nstacked
+    resMap = resMap / iChunk.nObj
     nreturn = 1
     # rescale if desired
     if rescale_1 is not None:

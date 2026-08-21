@@ -172,6 +172,71 @@ if restart_run:
     assert os.path.exists(labels_file), (
         f"Region labels file {labels_file} not found. Cannot restart run without it. Set restart_run=False to generate new region labels."
     )
+
+
+# if the unit of cutout_rad is Mpc, then we need to convert it to degrees
+if cutout_rad.unit == u.Mpc:
+    # find out the stack geometry based on the redshift where the cutout size is largest in angular units
+    z_array = np.linspace(zmin, zmax, int((zmax - zmin) / dz_rescale) + 1)
+    angular_size_z = cosmo.arcsec_per_kpc_comoving(z_array).to(u.arcmin / u.Mpc) * cutout_rad
+    z_largest_cutout = z_array[np.argmax(angular_size_z)]
+    print("Cutout size is largest at z =", z_largest_cutout)
+    Mpc_per_deg_comov_base = cosmo.kpc_comoving_per_arcmin(z_largest_cutout).to(u.Mpc / u.degree)
+    Mpc_per_deg_phys_base = cosmo.kpc_proper_per_arcmin(z_largest_cutout).to(u.Mpc / u.degree)
+    
+    cutout_rad_deg = (
+        1 / (cosmo.kpc_comoving_per_arcmin(z_largest_cutout).to(u.Mpc / u.deg)) * cutout_rad
+    )
+elif cutout_rad.unit in [u.arcmin, u.arcsec]:
+    cutout_rad_deg = cutout_rad.to(u.deg)
+else:
+    raise ValueError(
+        "cutout_rad must be in units of Mpc, degrees, arcminutes, or arcseconds"
+    )
+maskpath=None
+if rank==0:
+    if maskfile_list is not None:
+        print("Found masks")
+        if len(maskfile_list)==1 and "shrunk" in maskfile_list[0]:
+            maskpath = maskfile_list[0]
+            combined_mask = enmap.read_map(maskpath)
+        else:
+            for i, maskpath in enumerate(maskfile_list):
+                try:
+                    mask = enmap.read_map(maskpath)
+                    if i == 0:
+                        combined_mask = mask
+                    else:
+                        combined_mask *= mask
+                except Exception as e:
+                    raise ValueError(f"Could not read mask file {maskpath}. Please ensure it is enmap format.") from e
+
+            # shrink the True part of the mask the amount given, or by size of the cutouts
+            print("Shrinking mask...")
+            if avoid_mask_by is not None:
+                combined_mask = enmap.shrink_mask(combined_mask, avoid_mask_by.to(u.rad).value)
+            else:
+                combined_mask = enmap.shrink_mask(combined_mask, cutout_rad_deg.to(u.rad).value)
+            # write mask to new file and delete
+            maskpath = os.path.join(savepath,"combined_mask.fits")
+            # Ensure FITS-compatible binary mask
+            combined_mask = (combined_mask > 0).astype(np.uint8)
+            enmap.write_map(maskpath, combined_mask) # error here ML
+            print("Combined mask written to", maskpath)
+        # rank 1 reduces its catalog
+        cat.mask_catalog(combined_mask)
+        del combined_mask
+
+# share new maskpath with the other ranks
+if use_mpi and size > 1:
+    maskpath = comm.bcast(maskpath, root=0)
+
+# every other rank now reads in the mask
+if rank > 0:
+    if maskpath is not None:
+        combined_mask = enmap.read_map(maskpath)
+        cat.mask_catalog(combined_mask)
+        del combined_mask
     
 if errors:
     if os.path.exists(labels_file) and restart_run:
@@ -200,58 +265,6 @@ else:
     cat.labels = np.zeros(len(cat.ra), dtype=np.int64) # they are all region '0'
     
 
-# if the unit of cutout_rad is Mpc, then we need to convert it to degrees
-if cutout_rad.unit == u.Mpc:
-    # find out the stack geometry based on the redshift where the cutout size is largest in angular units
-    z_array = np.linspace(zmin, zmax, int((zmax - zmin) / dz_rescale) + 1)
-    angular_size_z = cosmo.arcsec_per_kpc_comoving(z_array).to(u.arcmin / u.Mpc) * cutout_rad
-    z_largest_cutout = z_array[np.argmax(angular_size_z)]
-    print("Cutout size is largest at z =", z_largest_cutout)
-    Mpc_per_deg_comov_base = cosmo.kpc_comoving_per_arcmin(z_largest_cutout).to(u.Mpc / u.degree)
-    Mpc_per_deg_phys_base = cosmo.kpc_proper_per_arcmin(z_largest_cutout).to(u.Mpc / u.degree)
-    
-    cutout_rad_deg = (
-        1 / (cosmo.kpc_comoving_per_arcmin(z_largest_cutout).to(u.Mpc / u.deg)) * cutout_rad
-    )
-elif cutout_rad.unit in [u.arcmin, u.arcsec]:
-    cutout_rad_deg = cutout_rad.to(u.deg)
-else:
-    raise ValueError(
-        "cutout_rad must be in units of Mpc, degrees, arcminutes, or arcseconds"
-    )
-maskpath=None
-if rank==0:
-    if maskfile_list is not None:
-        print("Found masks")
-        if len(maskfile_list)==1 and "shrunk" in maskfile_list[0]:
-            maskpath = maskfile_list[0]
-        else:
-            for i, maskpath in enumerate(maskfile_list):
-                try:
-                    mask = enmap.read_map(maskpath)
-                    if i == 0:
-                        combined_mask = mask
-                    else:
-                        combined_mask *= mask
-                except Exception as e:
-                    raise ValueError(f"Could not read mask file {maskpath}. Please ensure it is enmap format.") from e
-
-            # shrink the True part of the mask the amount given, or by size of the cutouts
-            print("Shrinking mask...")
-            if avoid_mask_by is not None:
-                combined_mask = enmap.shrink_mask(combined_mask, avoid_mask_by.to(u.rad).value)
-            else:
-                combined_mask = enmap.shrink_mask(combined_mask, cutout_rad_deg.to(u.rad).value)
-            # write mask to new file and delete
-            maskpath = os.path.join(savepath,"combined_mask.fits")
-            # Ensure FITS-compatible binary mask
-            combined_mask = (combined_mask > 0).astype(np.uint8)
-            enmap.write_map(maskpath, combined_mask) # error here ML
-            print("Combined mask written to", maskpath)
-            del combined_mask
-        # share new maskpath with the other ranks
-if use_mpi and size > 1:
-    maskpath = comm.bcast(maskpath, root=0)
 
 cutout_resolution_deg = (0.5 * u.arcmin).to(u.deg)
 print(
@@ -362,10 +375,10 @@ if not os.path.exists(file_i):
 
             ## Distance computed
             dist_imap = dist_to_nearest_edge(np.radians(dec_inreg), np.radians(ra_inreg), np.radians(lowdec.value), np.radians(highdec.value), np.radians(lowra.value), np.radians(highra.value))
-            print("RA bounds:", lowra, highra)
-            print("RA range of objects:", ra_inreg.min(), ra_inreg.max())
-            print("dist_imap min/max:", np.degrees(dist_imap).min(),
-                                        np.degrees(dist_imap).max())
+            # print("RA bounds:", lowra, highra)
+            # print("RA range of objects:", ra_inreg.min(), ra_inreg.max())
+            # print("dist_imap min/max:", np.degrees(dist_imap).min(),
+                                        # np.degrees(dist_imap).max())
 
             edge_ok  = dist_imap >= min_safe_dist_rad #RH checking all distances
             bad = ~edge_ok
@@ -484,41 +497,15 @@ if not os.path.exists(file_i):
                     thumbs_inz = thumbs[inz]
                     # get the stack
                     print("Stacking region", n, "at z", z)
-                    if maskfile_list is not None:
-                        if mask_with=='thumbs':
-                            stack_n, stack_n_phys, stack_n_comov = stackChunk(
-                                chunkObj,
-                                geom,
-                                imap=imap,
-                                orient=orient,
-                                rescale_1=phys_rescale_factor,
-                                rescale_2=comov_rescale_factor,
-                                thumbnails=thumbs_inz,
-                                thumbnails_mask=mask_thumbs[inz],
-                                mask_by="thumbs"
-                            )
-                        elif mask_with=='fullmask':
-                            stack_n, stack_n_phys, stack_n_comov = stackChunk(
-                                chunkObj,
-                                geom,
-                                imap=imap,
-                                imask=imask,
-                                orient=orient,
-                                rescale_1=phys_rescale_factor,
-                                rescale_2=comov_rescale_factor,
-                                thumbnails=thumbs_inz,
-                                mask_by="full_mask"
-                            )
-                    else: # no masking
-                        stack_n, stack_n_phys, stack_n_comov = stackChunk(
-                            chunkObj,
-                            geom,
-                            imap=imap,
-                            orient=orient,
-                            rescale_1=phys_rescale_factor,
-                            rescale_2=comov_rescale_factor,
-                            thumbnails=thumbs_inz,
-                        )
+                    stack_n, stack_n_phys, stack_n_comov = stackChunk(
+                        chunkObj,
+                        geom,
+                        imap=imap,
+                        orient=orient,
+                        rescale_1=phys_rescale_factor,
+                        rescale_2=comov_rescale_factor,
+                        thumbnails=thumbs_inz,
+                    )
                 # save to this delta-z subgroup
                 z_group.attrs["Nobj"] = chunkObj.nObj
                 z_group.create_dataset("stack_deg", data=stack_n)
@@ -539,6 +526,7 @@ if use_mpi and size > 1:
     # wait for the others to finish writing
     print("Rank", rank, "waiting for others to finish writing.")
     comm.Barrier()
+    print("Rank", rank, "passed barrier.")
     # collect all
     if rank == 0 and size > 1:
         print("Consolidating stacks to", outfile)
