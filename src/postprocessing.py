@@ -200,7 +200,8 @@ class Stack:
                     profile_splits_binned_m.append(np.asarray(binned_prof))
                 profile_splits_binned.append(np.asarray(profile_splits_binned_m))
             self.Cr_profile_splits_binned = profile_splits_binned  # list with len(m_max), each element shape (n_splits, n_bins)
-            # repeat for Sr
+            # repeat for Sr. First one will be all 0's; down the line there will be nans; maybe should change at some point
+            profile_splits_binned = []
             for m, profsplits in enumerate(self.Sr_profile_splits):
                 profile_splits_binned_m = []
                 for split in profsplits:
@@ -243,6 +244,7 @@ class Stack:
             return
         else:
             for m, profsplits in enumerate(self.Cr_profile_splits):
+                
                 covmat, cormat = ss.covariances(
                     profsplits, self.split_wgts, self.Nsamples
                 )
@@ -272,9 +274,11 @@ class Stack:
             return
         else:
             for m, profsplits in enumerate(self.Cr_profile_splits_binned):
+                print(len(self.Cr_profile_splits_binned))
                 covmat, cormat = ss.covariances(
                     profsplits, self.split_wgts, self.Nsamples
                 )
+                print(m)
                 self.Cr_covmat_binned.append(covmat)
                 self.Cr_cormat_binned.append(cormat)
                 self.Cr_errors_binned.append(np.sqrt(np.diag(covmat)))

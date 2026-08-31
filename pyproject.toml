@@ -1,0 +1,19 @@
+[project]
+name = "oriented_superclustering"
+version = "0.0.1"
+authors = [
+  { name="Martine Lokken", email="mlokken@ifae.es" },
+]
+description = "Constrained oriented stacking for CMB x LSS"
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+license = "MIT"
+
+
+[project.urls]
+Homepage = "https://github.com/marlena6/oriented_superclustering.git"
+Issues = "https://github.com/marlena6/oriented_superclustering/issues"
