@@ -37,7 +37,7 @@ class Catalog(object):
             colnames = data.colnames
             header = None
             # conver table to dict of numpy
-            data = {col: data[col].as_array() for col in colnames}
+            data = {col: data[col].data for col in colnames}
         else:
             raise ValueError("File type must be csv or fits, no other types yet implemented")
         
@@ -123,7 +123,7 @@ class Catalog(object):
                 good &= idx_good
 
         if sum(~good) > 0:
-            for attr in ['ra', 'dec', 'z', 'alpha', 'vr', 'x_pol', 'y_pol', 'e', 'nu', 'w']:
+            for attr in ['id', 'ra', 'dec', 'z', 'alpha', 'vr', 'x_pol', 'y_pol', 'e', 'nu', 'w']:
                 if attr in self.__dict__.keys():
                     setattr(self, attr, getattr(self, attr)[good])
             self.nObj = len(self.ra) # reset nObj

@@ -1,0 +1,56 @@
+# ===============================
+# MPI / execution settings
+# ===============================
+mpi:
+  use_mpi: true # split the regions over cores. recommend n_cpu = nreg, but always within 1 node
+
+# ===============================
+# Run control
+# ===============================
+run:
+  restart_run: false # try setting to true if you ran partway but job failed for some cores, or else delete the outputs and start over
+  newdir_name: # name of output directory that will be created within basepath
+  test: false # if true, only stacks small number of objects from the catalog
+  nObj_test: 5000   # n objects to stack in testing. only used if test=true
+
+# ===============================
+# Error estimation
+# ===============================
+errors:
+  enabled: true # stack in different regions to estimate uncertainties
+  nreg: 48   # number of regions if enabled
+
+# ===============================
+# Stacking / analysis options
+# ===============================
+analysis:
+  orient: "asym_xy"   # options: original, random, sym, asym_x, asym_y, asym_xy
+  cutout_rad_mpc: # radius of cutouts in Mpc
+  dz_rescale: 0.01 # delta-z size of the stacking slices which will be rescaled to the same comoving or physical size
+  zmin: # define if you want to limit the redshift range smaller than that in the catalog
+  zmax: 
+  nu_min: 2 # minimum nu = F / rms(F) of the objects. Only used if nu column exists in input catalog
+  nu_max:
+  e_min: 0.3  # minimum ellipticity of the objects. Only used if e column exists in input catalog
+  e_max:
+  avoid_mask_by: # input number of degrees if you want to avoid masked areas by a size different than the cutout size
+  mask_with: fullmask # other option: thumbs 
+
+# ===============================
+# Paths
+# ===============================
+paths:
+  basepath: # where to create the new directory
+  orient_file: # path to the file with stacking points and (optionally) orientation information
+  mask_file_list:
+      - # enter list of masks, or just one. 1s indicates good regions, <1 is bad. If list, they will be multiplied by each other
+      - # second mask
+      - # third mask
+
+# # ===============================
+# Maps to stack
+# ===============================
+map:
+  type: # short string indicating the type of stacked map, e.g. 'y', to save in the outputs
+  path: # path to map file, healpix or pixell. If healpix, will be converted.
+  shortname: # short name for map. String.

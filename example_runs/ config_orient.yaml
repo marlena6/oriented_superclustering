@@ -1,0 +1,32 @@
+# ===============================
+# Run control
+# ===============================
+run:
+  save_path: # enter the full path, including filename, where you'd like the orientation information to be saved. Should be a new file
+  write_maps_to_file: false # Write the maps made to calculate orientations to file?
+  filenames_in_Mpc: true # If saving maps, write the filenames in Mpc or redshifts?
+
+# ===============================
+# Input files
+# ===============================
+files:
+  stacking_object_catalog: # fits or csv file with RA, Dec, z, and others
+  orient_object_catalog: # fits or csv file with RA, Dec, z, and others. Can be left blank if you want stacking catalog to be used for orientation.
+  randoms_catalog: # fits or csv file with RA, Dec, z, and others. Can be left blank if you don't want to use randoms.
+  mask: # healpix or pixell
+
+# ===============================
+# Stacking / analysis options
+# ===============================
+analysis:
+  los_split_mode: auto_overlap #sandwich each stack-object bin in orient-object bin, with overlap in adjacent orient-object bins
+  fraction_input_data: 1 
+  smoothing_Mpc: 8 # choose the size in Mpc (Gaussian FWHM) to smooth the input catalog for orientations
+  orientation_mode: asym_xy # asym_x, asym_y, sym, random, original
+  center_objects_label: # name the central objects
+  orient_objects_label: # name the orientation objects
+  healpix_nside: 2048
+  z_min:  # if you want to reduce the catalog to a particular range
+  z_max: 
+  stacking_slice_width_Mpc: 10 # line-of-sight extent of the slices to identify stacking objects
+  orientation_slice_width_Mpc: 20 # the stacking objects are surrounded by orientation objects over this line-of-sight extent

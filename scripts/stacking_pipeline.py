@@ -519,9 +519,8 @@ if not os.path.exists(file_i):
             stacking_end = time.time()
             print(f"Finished stacking region {n} in {stacking_end - stacking_start:.1f} seconds.")
 else:
-    assert restart_run, (
-        f"File {file_i} already exists. If you want to retry consolidating the files, set restart_run=True."
-    )
+    if not restart_run:
+        sys.exit(f"File {file_i} already exists. If you want to retry consolidating the files, set restart_run=True.")
 if use_mpi and size > 1:
     # wait for the others to finish writing
     print("Rank", rank, "waiting for others to finish writing.")
