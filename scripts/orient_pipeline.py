@@ -125,8 +125,17 @@ else:
 if randoms_catalog is not None:
     cat_ran = Catalog(randoms_catalog)
     
+# take a fraction of the orient + randoms catalog if frac is less than 1
+if frac_use < 1:
+    rand_idx_oo = np.random.choice(len(cat_oo.ra), size=int(frac_use*len(cat_oo.ra)), replace=False)
+    cat_oo.prune_catalog(index=rand_idx_oo)
+    rand_idx_rand = np.random.choice(len(cat_ran.ra), size=int(frac_use*len(cat_ran.ra)), replace=False)
+    cat_ran.prune_catalog(index=rand_idx_rand)
+
 # prune all catalogs to z range and order by z
+print(f"Pruning catalogs to z range and sorting by z. Catalog is initially, {len(cat_so.ra)} long.")
 cat_so.prune_catalog(condition={"z":(minz, maxz)}, inplace=True)
+print("After pruning, catalog is now, {:d} long.".format(len(cat_so.ra)))
 cat_oo.prune_catalog(condition={"z":(minz, maxz)}, inplace=True)
 cat_so.sort_catalog(sort_by="z")
 cat_oo.sort_catalog(sort_by="z")
@@ -236,6 +245,7 @@ print(f"Total time for processing zbins was {tot_time:.0f} seconds, or {(tot_tim
 
 # prep the dictionary for saving. 
 # remove all rows with nans (e.g., some distances might not have been recorded)
+print("Catalog has nans with zmin", cat_so.z[np.isnan(cat_so.alpha)].min(), "and zmax", cat_so.z[np.isnan(cat_so.alpha)].max())
 cat_so.remove_nans()
 # report final zmin, zmax of catalog
 print("Final catalog zmin, zmax:", cat_so.z.min(), cat_so.z.max())
