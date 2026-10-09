@@ -27,17 +27,22 @@ class Catalog(object):
         self.nObj = nObj
         
         possible_colnames = ['ra','dec','w','wgt','weight','z','alpha','x_pol','y_pol','nu','e','vr', 'id','targetid']
-        if ".csv" in self.pathInCatalog:
+        if self.pathInCatalog.endswith(".csv"):
             header, data = utils.read_csv_with_header(self.pathInCatalog)
             colnames = data.columns
             # convert dataframe to dict of numpy
             data = {col: data[col].to_numpy() for col in colnames}
-        elif ".fits" in self.pathInCatalog:
+        elif self.pathInCatalog.endswith(".fits"):
             data = Table(fitsio.read(self.pathInCatalog))
             colnames = data.colnames
             header = None
             # conver table to dict of numpy
             data = {col: data[col].data for col in colnames}
+        elif self.pathInCatalog.endswith(".npz"):
+            npz_data = np.load(self.pathInCatalog)
+            data = {key: npz_data[key] for key in npz_data.files}
+            colnames = list(data.keys())
+            header = None
         else:
             raise ValueError("File type must be csv or fits, no other types yet implemented")
         

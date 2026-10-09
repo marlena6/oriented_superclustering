@@ -70,7 +70,6 @@ nu_max = cfg["analysis"]["nu_max"]
 e_min = cfg["analysis"]["e_min"]
 e_max = cfg["analysis"]["e_max"]
 avoid_mask_by = cfg["analysis"]["avoid_mask_by"] # degrees from which to avoid mask edges
-mask_with = cfg["analysis"]["mask_with"]
 
 if zmin in ["None","none",None, ""]:
     zmin = None
@@ -202,14 +201,16 @@ if rank==0:
             combined_mask = enmap.read_map(maskpath)
         else:
             for i, maskpath in enumerate(maskfile_list):
-                try:
-                    mask = enmap.read_map(maskpath)
-                    if i == 0:
-                        combined_mask = mask
-                    else:
-                        combined_mask *= mask
-                except Exception as e:
-                    raise ValueError(f"Could not read mask file {maskpath}. Please ensure it is enmap format.") from e
+                maskpath = readmap({"path":maskpath,"type":"mask"})  # readmap will filter / reproject if necessary
+                # try:
+                #     mask = enmap.read_map(maskpath)
+                mask = enmap.read_map(maskpath["path"])
+                if i == 0:
+                    combined_mask = mask
+                else:
+                    combined_mask *= mask
+                # except Exception as e:
+                #     raise ValueError(f"Could not read mask file {maskpath}. Please ensure it is enmap format.") from e
 
             # shrink the True part of the mask the amount given, or by size of the cutouts
             print("Shrinking mask...")
@@ -218,7 +219,7 @@ if rank==0:
             else:
                 combined_mask = enmap.shrink_mask(combined_mask, cutout_rad_deg.to(u.rad).value)
             # write mask to new file and delete
-            maskpath = os.path.join(savepath,"combined_mask.fits")
+            maskpath = os.path.join(savepath,"mask_shrunk.fits")
             # Ensure FITS-compatible binary mask
             combined_mask = (combined_mask > 0).astype(np.uint8)
             enmap.write_map(maskpath, combined_mask) # error here ML
@@ -244,6 +245,9 @@ if errors:
         print(f"Read region labels from {labels_file}")
     else:
         if rank == 0:
+            print("N regions", nreg)
+            print(len(cat.ra))
+            print(len(cat.dec))
             km = kmeans_sample(np.vstack((cat.ra, cat.dec)).T, nreg, maxiter=100, tol=1.0e-5)
             labels = km.labels.astype(np.int64)
             np.savetxt(labels_file, labels, fmt="%d")
@@ -423,15 +427,7 @@ if not os.path.exists(file_i):
                     ra_inreg,
                     dec_inreg
                 )
-            # now check for masked regions within thumbnails
-            
-            if mask_with == 'thumbs' and maskfile_list is not None:
-                print("Checking mask...")
-                mask_thumbs = extractThumbnails(
-                chunkObj_reg,
-                geom,
-                imask
-            )
+
                 
             thumbs_time = time.time()
             

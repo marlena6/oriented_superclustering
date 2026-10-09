@@ -357,7 +357,7 @@ def readmap(inmap_dict, kappa_filter_path="/global/cfs/projectdirs/act/www/dr6_l
             enmap_path = mappath.replace(".fits", "_enmap.fits")
             # Check if another map already exists with _enmap in the same directory
             if os.path.exists(enmap_path):
-                print("Enmap version of map already exists at {enmap_path}. Using that.")
+                print(f"Enmap version of map already exists at {enmap_path}. Using that.")
                 outmap_dict["path"] = enmap_path
                 if inmap_dict["type"] == 'kappa' and "filter" not in mappath:
                     print("Filtering and reprojecting to enmap. This may take a while...")

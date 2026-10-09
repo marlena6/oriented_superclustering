@@ -102,17 +102,17 @@ elif los_split_mode == 'custom_dlist':
     dlist_tot_oo, zlist_tot_oo = sao.dlist(cosmo, dlist=dbins)
     
 elif los_split_mode == 'auto_overlap':
-    minz = minz+.005 # add small buffer
-    maxz = maxz-.005 # add small buffer
-    comoving_oo_narrowbin_start  = cosmo.comoving_distance(minz).to(u.Mpc)
-    comoving_oo_narrowbin_0 = np.array([comoving_oo_narrowbin_start.value, (comoving_oo_narrowbin_start+oo_width*u.Mpc).value])
-    nbins = int((cosmo.comoving_distance(maxz).to(u.Mpc).value - comoving_oo_narrowbin_start.value)/so_width)
-    dbins = [comoving_oo_narrowbin_0 + i * so_width for i in range(nbins)] 
+    minz = minz
+    maxz = maxz
+    comoving_so_narrowbin_start  = cosmo.comoving_distance(minz).to(u.Mpc)
+    comoving_so_narrowbin_0 = np.array([comoving_so_narrowbin_start.value, (comoving_so_narrowbin_start+so_width*u.Mpc).value])
+    nbins = int((cosmo.comoving_distance(maxz).to(u.Mpc).value - comoving_so_narrowbin_start.value)/so_width)
+    dbins = [comoving_so_narrowbin_0 + i * so_width for i in range(nbins)] 
     print("Have you made sure to customize the width of the orientation and stacking slices? It is currently set to {:d} and {:d} Mpc with a mininum z of {:.2f} and maximum z of {:.2f}.".format(oo_width, so_width, minz, maxz))
-    dlist_tot_oo, zlist_tot_oo = sao.dlist(cosmo, dlist=dbins)    
+    dlist_tot_so, zlist_tot_so = sao.dlist(cosmo, dlist=dbins)    
 
 # save the zlist to a file
-np.savetxt(os.path.join(save_path, "zlist.txt"), zlist_tot_oo)
+np.savetxt(os.path.join(save_path, "zlist.txt"), zlist_tot_so)
 
 
 # if different, load the orientation data
@@ -136,7 +136,7 @@ if frac_use < 1:
 print(f"Pruning catalogs to z range and sorting by z. Catalog is initially, {len(cat_so.ra)} long.")
 cat_so.prune_catalog(condition={"z":(minz, maxz)}, inplace=True)
 print("After pruning, catalog is now, {:d} long.".format(len(cat_so.ra)))
-cat_oo.prune_catalog(condition={"z":(minz, maxz)}, inplace=True)
+cat_oo.prune_catalog(condition={"z":(minz-0.1, maxz+0.1)}, inplace=True)
 cat_so.sort_catalog(sort_by="z")
 cat_oo.sort_catalog(sort_by="z")
 if randoms_catalog is not None:
@@ -145,17 +145,17 @@ if randoms_catalog is not None:
 
 
 # set the division of catalogs
-dbincent = [(dlist_tot_oo[i][0]+dlist_tot_oo[i][1])/2. for i in range(len(dlist_tot_oo))]
+dbincent = [(dlist_tot_so[i][0]+dlist_tot_so[i][1])/2. for i in range(len(dlist_tot_so))]
 zbincent = [z_at_value(cosmo.comoving_distance, dbincent[i]*u.Mpc).value for i in range(len(dbincent))]
 smth_arcmin = [(cosmo.arcsec_per_kpc_comoving(zbincent[i]).to(u.arcmin/u.Mpc) * (smth*u.Mpc)).value for i in range(len(zbincent))]
 if los_split_mode=='auto_overlap' or los_split_mode=='custom_dlist':
     # widths of stacking objects and orient objects are different
-    dlist_tot_so = np.asarray([[dbincent[i]-so_width/2., dbincent[i]+so_width/2.] for i in range(len(dbincent))])
-    zlist_tot_so = np.asarray([[z_at_value(cosmo.comoving_distance, dlist_tot_so[i][0]*u.Mpc).value, z_at_value(cosmo.comoving_distance, dlist_tot_so[i][1]*u.Mpc).value] for i in range(len(dbincent))])
+    dlist_tot_oo = np.asarray([[dbincent[i]-oo_width/2., dbincent[i]+oo_width/2.] for i in range(len(dbincent))])
+    zlist_tot_oo = np.asarray([[z_at_value(cosmo.comoving_distance, dlist_tot_oo[i][0]*u.Mpc).value, z_at_value(cosmo.comoving_distance, dlist_tot_oo[i][1]*u.Mpc).value] for i in range(len(dbincent))])
 elif los_split_mode=='auto_all' or los_split_mode=='custom_zlist':
     # widths of stacking objects and orient objects are the same
-    dlist_tot_so = dlist_tot_oo
-    zlist_tot_so = zlist_tot_oo
+    dlist_tot_oo = dlist_tot_so
+    zlist_tot_oo = zlist_tot_so
 
 cat_split_idx_so_lower = np.searchsorted(
     cat_so.z,
@@ -177,16 +177,17 @@ cat_split_idx_oo_upper = np.searchsorted(
     zlist_tot_oo[:, 1],
     side='left'
 )
-cat_split_idx_ran_lower = np.searchsorted(
-    cat_ran.z,
-    zlist_tot_oo[:, 0],
-    side='left'
-)
-cat_split_idx_ran_upper = np.searchsorted(
-    cat_ran.z,
-    zlist_tot_oo[:, 1],
-    side='left'
-)
+if randoms_catalog is not None:
+    cat_split_idx_ran_lower = np.searchsorted(
+        cat_ran.z,
+        zlist_tot_oo[:, 0],
+        side='left'
+    )
+    cat_split_idx_ran_upper = np.searchsorted(
+        cat_ran.z,
+        zlist_tot_oo[:, 1],
+        side='left'
+    )
 
 #### This is where the main calculations happen ####
 zloop_begin = time.time()
@@ -229,13 +230,17 @@ for i in range(len(zlist_tot_so)):
     else:
         compute_xy_pol = False
     print("Getting orientations.")
-    alpha, e, nu, x_pol, y_pol = sao.measure_orientation_QU(cat_so.ra[cat_split_idx_so_lower[i]:cat_split_idx_so_upper[i]], cat_so.dec[cat_split_idx_so_lower[i]:cat_split_idx_so_upper[i]], odmap, mode='density', compute_xy_pol=True, mask=mask)
-    # save the quantities. There should be 1 alpha, e, nu etc measured per stacking-object.
-    cat_so.alpha[cat_split_idx_so_lower[i]:cat_split_idx_so_upper[i]] = alpha
-    cat_so.e[cat_split_idx_so_lower[i]:cat_split_idx_so_upper[i]] = e
-    cat_so.nu[cat_split_idx_so_lower[i]:cat_split_idx_so_upper[i]] = nu
-    cat_so.x_pol[cat_split_idx_so_lower[i]:cat_split_idx_so_upper[i]] = x_pol
-    cat_so.y_pol[cat_split_idx_so_lower[i]:cat_split_idx_so_upper[i]] = y_pol
+    ra_inbin = cat_so.ra[cat_split_idx_so_lower[i]:cat_split_idx_so_upper[i]]
+    dec_inbin = cat_so.dec[cat_split_idx_so_lower[i]:cat_split_idx_so_upper[i]]
+    print("Number of objects in bin:", len(ra_inbin), len(dec_inbin))
+    if len(ra_inbin)>0:
+        alpha, e, nu, x_pol, y_pol = sao.measure_orientation_QU(ra_inbin, dec_inbin, odmap, mode='density', compute_xy_pol=True, mask=mask)
+        # save the quantities. There should be 1 alpha, e, nu etc measured per stacking-object.
+        cat_so.alpha[cat_split_idx_so_lower[i]:cat_split_idx_so_upper[i]] = alpha
+        cat_so.e[cat_split_idx_so_lower[i]:cat_split_idx_so_upper[i]] = e
+        cat_so.nu[cat_split_idx_so_lower[i]:cat_split_idx_so_upper[i]] = nu
+        cat_so.x_pol[cat_split_idx_so_lower[i]:cat_split_idx_so_upper[i]] = x_pol
+        cat_so.y_pol[cat_split_idx_so_lower[i]:cat_split_idx_so_upper[i]] = y_pol
 
     end = time.time()
     print(f"Time elapsed for bin {i+1} out of {len(zlist_tot_oo)}: {end- zbin_start_time:.2f} seconds.")
@@ -260,7 +265,8 @@ df = pd.DataFrame(to_save)
 with open(save_file, 'w') as f:
     f.write(f"# Original SO catalog: {cat_so.pathInCatalog}\n") # point to original catalog for the records
     f.write(f"# Original OO catalog: {cat_oo.pathInCatalog}\n") # point to original catalog for the records
-    f.write(f"# Original randoms catalog: {cat_ran.pathInCatalog}\n") # point to original catalog for the records
+    if randoms_catalog is not None:
+        f.write(f"# Original randoms catalog: {cat_ran.pathInCatalog}\n") # point to original catalog for the records
     f.write(f"# Smoothing scale used: {smth} Mpc\n")
     df.to_csv(f, index=False, header=True)
     

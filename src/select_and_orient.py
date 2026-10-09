@@ -116,7 +116,6 @@ def delta_g(nside, ra, dec, ra_rand=None, dec_rand=None, catalog_weights=None, r
         print("Mean rand:", np.mean(rand_map[mask]))
         print("Mean of delta map is", np.mean(delta_map[mask]))
         # hp.mollview(delta_map, max=0.5, min=-0.5)
-        
         return delta_map, mask
         
 
@@ -158,7 +157,7 @@ def overdensity_to_potential(overdensity_map_alms, nside):
     # ell filter
     ls = np.arange(3*nside)
     ls[0] = 1.
-    llplus = -1./(ls*(ls+1))
+    llplus = 1./(ls*(ls+1)) # don't make it negative, so peaks stay peaks
     llplus[0] = 0.
     # apply
     potential_alms = hp.sphtfunc.almxfl(overdensity_map_alms, llplus)
@@ -188,8 +187,9 @@ def get_sym(alms, nside):
     ell = hp.Alm.getlm(lmax)[0]
      # copy so we don't modify the input
     alm1 = alms.copy()
+    # apply spin-raising operator once
     alm1[1:] *= (ell[1:] * (ell[1:] + 1))**(-0.5) # avoid divide by zero for the monopole
-    alm1[0] = 0.
+    alm1[0] = 0. # no B-modes
     alm2 = np.zeros_like(alm1) # purely E-mode
     
     Vtheta, Vphi = hp.alm2map_spin(
@@ -201,13 +201,19 @@ def get_sym(alms, nside):
     return Vtheta, Vphi
     
 def measure_orientation_QU(ra, dec, overdensity_map, mode='density', compute_xy_pol=True, mask=None):
+    assert len(ra)>0, "No objects in catalog."
     # standard check: ensure zero mean
     if mask is None:
-        assert np.abs(np.mean(overdensity_map)) < .1, "The input map does not have zero mean."
+        if np.abs(np.mean(overdensity_map)) > .1:
+            print("Warning! The input map does not have zero mean.")
     else:
         # make sure mask is binary
         assert np.all((mask==0) | (mask==1)), "Mask should be binary (0 or 1)."
-        assert np.abs(np.mean(overdensity_map[mask>0])) < .1, "The input map does not have zero mean within the mask."
+        mean_map = np.mean(overdensity_map[mask>0])
+        if np.abs(mean_map) > .1:
+            # raise a warning if the overdensity map isn't reasonably close to mean-0:
+            raise Warning("The input map does not have zero mean within the mask, mean is {:.4f}".format(mean_map))
+        
 
     nside = hp.get_nside(overdensity_map)
     alms  = hp.sphtfunc.map2alm(overdensity_map, pol=False)
