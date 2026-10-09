@@ -5,6 +5,7 @@ from astropy.cosmology import z_at_value
 import gc
 import healpy as hp
 import astropy.units as u
+import warnings
 
 def get_radecz(filepath, return_id=False, return_weight=False, return_v=False):
     print("Catalog entered:", filepath)
@@ -212,7 +213,8 @@ def measure_orientation_QU(ra, dec, overdensity_map, mode='density', compute_xy_
         mean_map = np.mean(overdensity_map[mask>0])
         if np.abs(mean_map) > .1:
             # raise a warning if the overdensity map isn't reasonably close to mean-0:
-            raise Warning("The input map does not have zero mean within the mask, mean is {:.4f}".format(mean_map))
+            warnings.warn("The input map does not have zero mean within the mask, mean is {:.4f}".format(mean_map))
+            
         
 
     nside = hp.get_nside(overdensity_map)
