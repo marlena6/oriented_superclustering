@@ -42,7 +42,6 @@ else:
     rank = 0
     size = 1
 
-restart_run = cfg["run"]["restart_run"]
 newdir_name = cfg["run"]["newdir_name"]
 test = cfg["run"]["test"]
 if test:
@@ -79,21 +78,20 @@ basepath = cfg["paths"]["basepath"]
 orientfile = cfg["paths"]["orient_file"]
 maskfile_list = cfg["paths"]["mask_file_list"]
 inmap_info = cfg["map"]
+
 # multiple mask files can be entered. If multiple, try to multiply them together.
 savepath = os.path.join(basepath, newdir_name)
 
 
 # have rank 0 make the new directory, all others wait
 if rank == 0:
-    assert not os.path.exists(newdir_name) or restart_run, (
-        f"Directory {newdir_name} already exists. If you want to restart the run, set restart_run=True."
+    assert not os.path.exists(savepath), (
+        f"Directory {savepath} already exists. Please delete it or set a different newdir_name in the config file."
     )
     if not os.path.exists(savepath):
         os.mkdir(savepath)
         print(f"Created directory {savepath} for this run.")
-    if restart_run:
-        print(f"Restarting run in existing directory {savepath}.")
-
+    
     inmap_info = readmap(inmap_info) # reads the map, filters / reprojects if necessary, modifies path in inmap_info if necessary
     
     
@@ -117,7 +115,10 @@ if not os.path.exists(mappath):
 
 # Reading the geometry of the bigger map to keep for later
 shape,wcs=enmap.read_fits_geometry(mappath, hdu=None, quick=True)
-box = enmap.box(shape, wcs)   # shape (2,2): [[dec_min,ra_min],[dec_max,ra_max]] in radians
+map_box_deg = np.degrees(enmap.box(shape, wcs))   # shape (2,2): [[dec_min,ra_min],[dec_max,ra_max]] in radians
+map_dec_min, map_dec_max = np.sort(map_box_deg[:, 0])
+map_ra_min,  map_ra_max  = np.sort(map_box_deg[:, 1])   # sort: CAR RA usually decreases with pixel index
+map_full_ra = (map_ra_max - map_ra_min) >= 359.9        # full-sky-in-RA maps have no RA edge
 
 # read the orientation information
 if rank == 0:
@@ -137,13 +138,32 @@ if rank == 0:
         shutil.copy(config_file_path, savepath + "/stacking_config_used.yaml")
 
 config = {'nu_min':nu_min, 'nu_max':nu_max, 'e_min':e_min, 'e_max':e_max}
+
+## make sure same selection of Catalog is done across ranks, if in test mode ##
+seed = None
+if nObj is not None:
+    seed_file = f"{savepath}/catalog_seed{teststr}.txt"
+    if rank == 0:
+        if cfg["run"].get("seed") is not None:
+            seed = int(cfg["run"]["seed"])  # optional manual override
+        else:
+            seed = int(np.random.SeedSequence().entropy % 2**63) # fresh OS entropy
+        np.savetxt(seed_file, [seed], fmt="%d")
+    if use_mpi and size > 1:
+        seed = comm.bcast(seed, root=0)
 # every rank reads -- initially had this different but finding issues with broadcasting object on NERSC
 cat = catalog.Catalog(
     pathInCatalog=orientfile,
     nObj=nObj,
-    config=config
+    config=config,
+    seed=seed
 )
+
 print(f"Rank {rank} read the catalog with {len(cat.z)} objects.")
+velocity_stack = bool(cfg["analysis"].get("velocity_stack", False))
+#if "velocity_stack" is True, cat.vr must be provided
+if velocity_stack:
+    assert cat.vr is not None, "Need to provide vr in catalog if you want to do velocity-weighted stacking. Otherwise set velocity_stack to False in the config."
 if zmin is None:
     zmin = np.amin(cat.z)
     print(f"zmin not provided. Using minimum redshift in catalog: {zmin:.3f}")
@@ -165,12 +185,7 @@ if rank == 0:
 assert not os.path.exists(outfile), f"Final output file already exists at: {outfile}"
 
 #### getting the region splits for errors ####
-# if labels file already exists, read from that
 labels_file = f"{savepath}/region_labels_{nreg}reg{teststr}.txt"
-if restart_run:
-    assert os.path.exists(labels_file), (
-        f"Region labels file {labels_file} not found. Cannot restart run without it. Set restart_run=False to generate new region labels."
-    )
 
 
 # if the unit of cutout_rad is Mpc, then we need to convert it to degrees
@@ -192,6 +207,11 @@ else:
     raise ValueError(
         "cutout_rad must be in units of Mpc, degrees, arcminutes, or arcseconds"
     )
+
+pad_deg = 0.0 if orient=='original' else 0.2
+r_need = ((cutout_rad_deg.value + pad_deg) * np.sqrt(2)) * u.deg   # deg
+margin = 0.1 * u.deg
+
 maskpath=None
 if rank==0:
     if maskfile_list is not None:
@@ -215,9 +235,9 @@ if rank==0:
             # shrink the True part of the mask the amount given, or by size of the cutouts
             print("Shrinking mask...")
             if avoid_mask_by is not None:
-                combined_mask = enmap.shrink_mask(combined_mask, avoid_mask_by.to(u.rad).value)
+                combined_mask = enmap.shrink_mask(combined_mask, (avoid_mask_by*u.deg).to(u.rad).value)
             else:
-                combined_mask = enmap.shrink_mask(combined_mask, cutout_rad_deg.to(u.rad).value)
+                combined_mask = enmap.shrink_mask(combined_mask, r_need.to(u.rad).value)
             # write mask to new file and delete
             maskpath = os.path.join(savepath,"mask_shrunk.fits")
             # Ensure FITS-compatible binary mask
@@ -227,6 +247,17 @@ if rank==0:
         # rank 1 reduces its catalog
         cat.mask_catalog(combined_mask)
         del combined_mask
+
+# cut catalog if map is not full-sky
+r = (r_need + margin).to(u.deg).value
+dec = cat.dec
+ok = (dec - map_dec_min >= r) & (map_dec_max - dec >= r)
+if not map_full_ra:
+    ra_w = (cat.ra - map_ra_min) % 360 + map_ra_min            # put catalog RA in the map's RA convention
+    cosd = np.cos(np.radians(np.minimum(np.abs(dec) + r, 90)))  # worst-case cos(dec) across the thumbnail
+    ok &= (cosd * (ra_w - map_ra_min) >= r) & (cosd * (map_ra_max - ra_w) >= r)
+print(f"Rank {rank}: map-edge cut keeps {ok.sum()}/{len(ok)} objects")
+cat.prune_catalog(index=ok, inplace=True)
 
 # share new maskpath with the other ranks
 if use_mpi and size > 1:
@@ -240,29 +271,26 @@ if rank > 0:
         del combined_mask
     
 if errors:
-    if os.path.exists(labels_file) and restart_run:
-        labels = np.loadtxt(labels_file, dtype=np.int64)
-        print(f"Read region labels from {labels_file}")
+    
+    if rank == 0:
+        print("N regions", nreg)
+        print(len(cat.ra))
+        print(len(cat.dec))
+        km = kmeans_sample(np.vstack((cat.ra, cat.dec)).T, nreg, maxiter=100, tol=1.0e-5)
+        labels = km.labels.astype(np.int64)
+        np.savetxt(labels_file, labels, fmt="%d")
+        print(f"Saved region labels to {labels_file}")
+        colors = ['C'+str(i) for i in range(10)]
+        rands  = np.random.choice(np.arange(len(cat.ra)), size=1000, replace=False)
+        plt.scatter(cat.ra[rands], cat.dec[rands], c=[colors[l%10] for l in labels[rands]], s=5)
+        plt.legend(handles=[plt.Line2D([0], [0], marker='o', color='w', label=f'Region {i}', markerfacecolor=colors[i%10], markersize=5) for i in range(nreg)],loc='best')
+        plt.savefig(f"{savepath}/region_splits.png")
+        plt.clf()
     else:
-        if rank == 0:
-            print("N regions", nreg)
-            print(len(cat.ra))
-            print(len(cat.dec))
-            km = kmeans_sample(np.vstack((cat.ra, cat.dec)).T, nreg, maxiter=100, tol=1.0e-5)
-            labels = km.labels.astype(np.int64)
-            np.savetxt(labels_file, labels, fmt="%d")
-            print(f"Saved region labels to {labels_file}")
-            colors = ['C'+str(i) for i in range(10)]
-            rands  = np.random.choice(np.arange(len(cat.ra)), size=1000, replace=False)
-            plt.scatter(cat.ra[rands], cat.dec[rands], c=[colors[l%10] for l in labels[rands]], s=5)
-            plt.legend(handles=[plt.Line2D([0], [0], marker='o', color='w', label=f'Region {i}', markerfacecolor=colors[i%10], markersize=5) for i in range(nreg)],loc='best')
-            plt.savefig(f"{savepath}/region_splits.png")
-            plt.clf()
-        else:
-            labels = None 
+        labels = None 
 
-        if use_mpi and size > 1:
-            labels = comm.bcast(labels, root=0)
+    if use_mpi and size > 1:
+        labels = comm.bcast(labels, root=0)
     cat.labels = labels  # add labels to the Catalog object
     print(f"Rank {rank} has labels with unique values: {np.unique(labels)}")
 else:
@@ -274,7 +302,6 @@ cutout_resolution_deg = (0.5 * u.arcmin).to(u.deg)
 print(
     f"will take thumbnails with size {cutout_rad_deg:.2f} and resolution {cutout_resolution_deg:.2f}."
 )
-
 # get the stack geometry just once
 geom = StackGeometry(cutout_rad_deg.value, cutout_resolution_deg.value)
 
@@ -304,17 +331,14 @@ if not os.path.exists(file_i):
         if cat.hdr is not None:
             print("Header of input catalog:", cat.hdr)
             f.attrs["orientation_constraints"] = "\n".join(cat.hdr.tolist())
-        elif cat.constraints is not None:
-            f.attrs["orientation_constraints"] = np.unique(cat.constraints).tolist()
-            
+
     
         mappath = inmap_info["path"]
         sn = inmap_info["shortname"]
         map_group = f.create_group(sn)
         map_group.attrs["map_path"] = mappath
         print(f"Handling input map: {mappath}")
-        min_safe_dist_deg = cutout_rad_deg.value * np.sqrt(2) # RH added for distance check
-        min_safe_dist_rad = np.radians(min_safe_dist_deg)
+        min_safe_dist_rad = r_need.to(u.rad).value 
 
         if size==1:
             readmap_start = time.time()
@@ -339,13 +363,13 @@ if not os.path.exists(file_i):
             # define the map edges for this region
             sc = SkyCoord(ra=cat.ra[in_reg]*u.deg, dec=cat.dec[in_reg]*u.deg, frame="icrs")
             ra_wrapped = sc.ra.wrap_at(180*u.deg)
+            lowdec  = max(sc.dec.min() - r_need - margin, -90 * u.deg)
+            highdec = min(sc.dec.max() + r_need + margin,  90 * u.deg)
+            cosd    = np.cos(max(abs(lowdec), abs(highdec)))   # worst-case cos(dec) inside the box
+            ra_pad  = r_need / cosd + margin
             lowra, highra = (
-                ra_wrapped.min() - (cutout_rad_deg+0.5*u.deg),
-                ra_wrapped.max() + (cutout_rad_deg+0.5*u.deg),
-            )
-            lowdec, highdec = (
-                sc.dec.min() - (cutout_rad_deg+0.5*u.deg),
-                sc.dec.max() + (cutout_rad_deg+0.5*u.deg),
+                ra_wrapped.min() - ra_pad,
+                ra_wrapped.max() + ra_pad,
             )
             
             if size > 1:
@@ -354,8 +378,8 @@ if not os.path.exists(file_i):
                     print(f"Region {n} crosses RA=180 deg line. Adjusting bounds.")
                     ra_wrapped[ra_wrapped < 0*u.deg] += 360*u.deg
                     lowra, highra = (
-                        ra_wrapped.min() - (cutout_rad_deg+0.5*u.deg),
-                        ra_wrapped.max() + (cutout_rad_deg+0.5*u.deg),
+                        ra_wrapped.min() - ra_pad,
+                        ra_wrapped.max() + ra_pad,
                     )
                     
                 print(f"Reading chunk of map with bounds RA: [{lowra:.2f},{highra:.2f}], Dec: [{lowdec:.2f},{highdec:.2f}]")
@@ -368,6 +392,7 @@ if not os.path.exists(file_i):
                     imask = enmap.read_map(maskpath, box=box)
 
             # extract the points within the sky region
+            
             alpha_inreg = cat.alpha[in_reg] if cat.alpha is not None else None
             x_pol_inreg = cat.x_pol[in_reg] if cat.x_pol is not None else None
             y_pol_inreg = cat.y_pol[in_reg] if cat.y_pol is not None else None
@@ -375,7 +400,10 @@ if not os.path.exists(file_i):
             dec_inreg = cat.dec[in_reg]
             z_inreg = cat.z[in_reg]
             # B.H.
+            
+
             vr_inreg = cat.vr[in_reg] if cat.vr is not None else None
+            # check if velocity_stack is True or False if vr is not None
 
             ## Distance computed
             dist_imap = dist_to_nearest_edge(np.radians(dec_inreg), np.radians(ra_inreg), np.radians(lowdec.value), np.radians(highdec.value), np.radians(lowra.value), np.radians(highra.value))
@@ -385,15 +413,7 @@ if not os.path.exists(file_i):
                                         # np.degrees(dist_imap).max())
 
             edge_ok  = dist_imap >= min_safe_dist_rad #RH checking all distances
-            bad = ~edge_ok
-            if ra_inreg[bad].size > 0:
-                print("Failed RAs:", ra_inreg[bad][:10])
-                print("Failed Decs:", dec_inreg[bad][:10])
-                print("Failed distances:", np.degrees(dist_imap[bad][:10]))
-            n_total  = len(dist_imap)
-            n_pass   = int(edge_ok.sum())
-            n_fail   = n_total - n_pass
-            print(f"  {n_pass}/{n_total} locations pass  ({n_fail} dropped)")
+            assert edge_ok.all(), "Some objects passing the map boundaries"
 
             if test:
                 plt.hist(dist_imap, bins=6, color="steelblue",
@@ -480,7 +500,8 @@ if not os.path.exists(file_i):
                     alpha_inreg_inz,
                     x_pol_inreg_inz,
                     y_pol_inreg_inz,
-                    vr_inreg_inz
+                    vr_inreg_inz,
+                    velocity_stack=velocity_stack
                 )
                 
                 if chunkObj.nObj == 0:
@@ -515,8 +536,8 @@ if not os.path.exists(file_i):
             stacking_end = time.time()
             print(f"Finished stacking region {n} in {stacking_end - stacking_start:.1f} seconds.")
 else:
-    if not restart_run:
-        sys.exit(f"File {file_i} already exists. If you want to retry consolidating the files, set restart_run=True.")
+    sys.exit(f"File {file_i} already exists. Please delete it or set a different newdir_name in the config file.")
+
 if use_mpi and size > 1:
     # wait for the others to finish writing
     print("Rank", rank, "waiting for others to finish writing.")
