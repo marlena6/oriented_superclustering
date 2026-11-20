@@ -127,7 +127,10 @@ class Catalog(object):
             
         if remove_nans:
             self.remove_nans()
-            
+        # set all other attributes to None if they don't exist
+        for attr in ['ra', 'dec', 'z', 'alpha', 'vr', 'x_pol', 'y_pol', 'e', 'nu', 'w', 'id']:
+            if not hasattr(self, attr):
+                setattr(self, attr, None)            
 
     def remove_nans(self):
         good = np.ones(len(self.ra)).astype(bool)
