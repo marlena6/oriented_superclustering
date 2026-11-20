@@ -1,19 +1,22 @@
 import numpy as np
 
 
-def bin_profile(r, Cr_m, rad_in_mpc, binsize):  # binsize in Mpc
-    # r is in Mpc
-
-    npix = len(Cr_m)
-    mpc_per_pix = rad_in_mpc / (npix - 1)
-    pix_per_bin = int(np.floor((binsize / mpc_per_pix)))
-    binned_prof = []
-    binned_r = []
-    for i in range(0, npix - pix_per_bin, pix_per_bin):
-        binned_prof.append(np.mean(Cr_m[i : i + pix_per_bin]))
-        binned_r.append(np.mean(r[i : i + pix_per_bin]))
-    # r = [i + 0.5 for i in range(len(binned_prof))]
-    # step_in_mpc = rad_in_mpc/len(r)
+def bin_profile(r, Cr_m, binsize):
+    """Average a profile into bins of width `binsize` (same units as r).
+    r must be evenly spaced; it may start at any radius (e.g. after cropping)."""
+    r = np.asarray(r)
+    Cr_m = np.asarray(Cr_m)
+    dr = r[1] - r[0]
+    pix_per_bin = int(np.floor(binsize / dr + 1e-6))  # tolerance: 2/0.2 -> 9.999...
+    if pix_per_bin < 1:
+        raise ValueError(f"binsize {binsize} is smaller than the pixel spacing {dr:.3g}")
+    if not np.isclose(pix_per_bin * dr, binsize, rtol=1e-3):
+        print(f"Warning: binsize {binsize} is not a multiple of the pixel spacing; "
+              f"actual bin width is {pix_per_bin * dr:.3g}")
+    nbins = len(r) // pix_per_bin
+    stop = nbins * pix_per_bin
+    binned_prof = Cr_m[:stop].reshape(nbins, pix_per_bin).mean(axis=1)
+    binned_r = r[:stop].reshape(nbins, pix_per_bin).mean(axis=1)
     return binned_prof, binned_r
 
 

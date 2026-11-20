@@ -7,26 +7,33 @@ from pixell import enmap
 ##################################################################################
 ##################################################################################
 
+ATTRS = [
+            'ra', 'dec', 'z', 'alpha', 'vr',
+            'x_pol', 'y_pol', 'e', 'nu', 'w', 'id'
+        ]
+OPTIONAL = ['alpha','x_pol','y_pol','nu','e','vr', 'id'] 
+
 class Catalog(object):
 
-    def __init__(self, pathInCatalog, name="", nObj=None, config={}):
+    def __init__(self, pathInCatalog, name="", nObj=None, config={}, seed=None):
         '''nObj: used to keep the first nObj objects of the catalog, useful for quick debugging
         '''
 
         self.name = name
         self.pathInCatalog = pathInCatalog
-        self.readInputCatalog(nObj=nObj, config=config)
+        self.readInputCatalog(nObj=nObj, config=config, seed=seed)
    
 
    ##################################################################################
    ##################################################################################
     
 
-    def readInputCatalog(self, nObj=None, config={}, remove_nans=True):
+    def readInputCatalog(self, nObj=None, config={}, remove_nans=True, seed=None):
         print("- read input catalog from "+self.pathInCatalog)
         self.nObj = nObj
         
         possible_colnames = ['ra','dec','w','wgt','weight','z','alpha','x_pol','y_pol','nu','e','vr', 'id','targetid']
+        
         if self.pathInCatalog.endswith(".csv"):
             header, data = utils.read_csv_with_header(self.pathInCatalog)
             colnames = data.columns
@@ -53,16 +60,18 @@ class Catalog(object):
         # sky coordinates and redshift
         sel = np.ones(len(data[ra_key])).astype(bool)
         if self.nObj < len(data[ra_key]):
+            rng = np.random.default_rng(seed)
             # make random selection of nObj by setting remainder to false
             n_remove = len(data[ra_key]) - self.nObj
-            remove_idx = np.random.choice(len(data[ra_key]),
-                        size=n_remove,
-                        replace=False)
-    
+            remove_idx = rng.choice(len(data[ra_key]), size=n_remove, replace=False)
+            
             sel[remove_idx] = False
             print("Randomly selected "+str(self.nObj)+" objects from the catalog")
             print("Old catalog size: "+str(len(data[ra_key])))
             print("New catalog size: "+str(np.sum(sel)))
+        
+        for attr in OPTIONAL:
+            setattr(self, attr, None) # set optional attributes to None if not present
         # check for any constraints
         nu_min = config.get('nu_min', None)
         nu_max = config.get('nu_max', None)
@@ -125,14 +134,14 @@ class Catalog(object):
 
     def remove_nans(self):
         good = np.ones(len(self.ra)).astype(bool)
-        for attr in ['ra', 'dec', 'z', 'alpha', 'vr', 'x_pol', 'y_pol', 'e', 'nu', 'w']:
-            if attr in self.__dict__.keys() and getattr(self, attr) is not None:
+        for attr in ATTRS:
+            if getattr(self, attr, None) is not None:
                 idx_good = ~np.isnan(getattr(self, attr))
                 good &= idx_good
 
         if sum(~good) > 0:
-            for attr in ['id', 'ra', 'dec', 'z', 'alpha', 'vr', 'x_pol', 'y_pol', 'e', 'nu', 'w']:
-                if attr in self.__dict__.keys() and getattr(self, attr) is not None:
+            for attr in ATTRS:
+                if getattr(self, attr, None) is not None:
                     setattr(self, attr, getattr(self, attr)[good])
             self.nObj = len(self.ra) # reset nObj
             print("Removed "+str(sum(~good))+" objects with NaN values from the catalog.")
@@ -164,13 +173,10 @@ class Catalog(object):
         if condition is None:
             condition = {}
 
-        attrs = [
-            'ra', 'dec', 'z', 'alpha', 'vr',
-            'x_pol', 'y_pol', 'e', 'nu', 'w', 'id'
-        ]
+        
 
         # Case-insensitive mapping from attribute name -> actual attribute name.
-        attr_lookup = {attr.lower(): attr for attr in attrs}
+        attr_lookup = {attr.lower(): attr for attr in ATTRS}
 
         # Work on a new object or on self.
         if not inplace:
@@ -214,7 +220,7 @@ class Catalog(object):
         # ---------------------------------------------------------
         # Apply selection
         # ---------------------------------------------------------
-        for attr in attrs:
+        for attr in ATTRS:
             value = getattr(self, attr, None)
 
             if value is not None:
@@ -228,6 +234,7 @@ class Catalog(object):
         if inplace:
             self.nObj = len(catalog.ra)  # Update nObj for the catalog
         if not inplace:
+            catalog.nObj = len(catalog.ra) # Update nObj for the new catalog
             return catalog  
 
     def sort_catalog(self, sort_by='z', ascending=True):
@@ -237,13 +244,10 @@ class Catalog(object):
             sort_by (str): Attribute name to sort by (case-insensitive).
             ascending (bool): If True, sort in ascending order; otherwise, descending.
         """
-        attrs = [
-            'ra', 'dec', 'z', 'alpha', 'vr',
-            'x_pol', 'y_pol', 'e', 'nu', 'w', 'id'
-        ]
+        
 
         # Case-insensitive mapping from attribute name -> actual attribute name.
-        attr_lookup = {attr.lower(): attr for attr in attrs}
+        attr_lookup = {attr.lower(): attr for attr in ATTRS}
 
         sort_by_lower = sort_by.lower()
 
@@ -267,9 +271,8 @@ class Catalog(object):
             sorted_indices = sorted_indices[::-1]
 
         # Apply sorting to all attributes
-        for attr in attrs:
+        for attr in ATTRS:
             value = getattr(self, attr, None)
-
             if value is not None:
                 setattr(self, attr, value[sorted_indices])
 
@@ -280,7 +283,6 @@ class Catalog(object):
         # extract map values at ra,dec
         val = enmap.at(imask, np.deg2rad([self.dec, self.ra]), mode="nn")
         full_sample = val > threshold
-        for attr in ['ra', 'dec', 'z', 'alpha', 'vr', 'x_pol', 'y_pol', 'e', 'nu', 'w', 'id']:
-
-            if attr in self.__dict__.keys() and getattr(self, attr) is not None:
+        for attr in ATTRS:
+            if getattr(self, attr, None) is not None:
                 setattr(self, attr, getattr(self, attr)[full_sample])

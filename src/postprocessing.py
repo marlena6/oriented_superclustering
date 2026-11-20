@@ -152,13 +152,13 @@ class Stack:
         self.Cr_avg_profiles_binned = []
         for m, avgprof in enumerate(self.Cr_avg_profiles):
             binned_prof, binned_r = ss.bin_profile(
-                self.r, avgprof, self.radius, binsize
+                self.r, avgprof, binsize
             )
             self.Cr_avg_profiles_binned.append(np.asarray(binned_prof))
         self.Sr_avg_profiles_binned = []
         for m, avgprof in enumerate(self.Sr_avg_profiles):
             binned_prof, binned_r = ss.bin_profile(
-                self.r, avgprof, self.radius, binsize
+                self.r, avgprof, binsize
             )
             self.Sr_avg_profiles_binned.append(np.asarray(binned_prof))
         self.r_binned = np.asarray(
@@ -178,12 +178,9 @@ class Stack:
             for i, bin in enumerate(custom_bins[:-1])
         ]
         self.Sr_avg_profiles_binned[m] = np.asarray(custom_Sr_profile_m)
-        self.r_binned = (
-            (custom_bins[:-1] + custom_bins[1:])
-            / 2
-            * self.radius
-            / (self.avg_img.shape[0] // 2)
-        )
+        custom_bins = np.asarray(custom_bins)
+        self.r_binned = np.array([self.r[custom_bins[i]:custom_bins[i + 1]].mean()
+                          for i in range(len(custom_bins) - 1)])
 
     def set_profile_splits_binned(self, binsize):  # bin the profile of each split
         if not self.__has_splits__:
@@ -195,7 +192,7 @@ class Stack:
                 profile_splits_binned_m = []
                 for split in profsplits:
                     binned_prof, binned_r = ss.bin_profile(
-                        self.r, split, self.radius, binsize
+                        self.r, split, binsize
                     )
                     profile_splits_binned_m.append(np.asarray(binned_prof))
                 profile_splits_binned.append(np.asarray(profile_splits_binned_m))

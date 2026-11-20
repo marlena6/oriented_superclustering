@@ -37,7 +37,7 @@ orient_catalog  = cfg["files"]["orient_object_catalog"]
 randoms_catalog = cfg["files"]["randoms_catalog"]
 maskfile = cfg["files"]["mask"] # if not None, should be a binary mask: fits file with 1s in the area to use and 0s in the area to mask out
 
-# Mode for splitting the data along the line-of-sight: either custom_zlist, custom_dlist, auto_all, or auto_overlap (automatic bin sandwiching with predefined relative sizes)
+# Mode for splitting the data along the line-of-sight: either custom_zlist, custom_dlist, or auto_overlap (automatic bin sandwiching with predefined relative sizes)
 los_split_mode = cfg["analysis"]["los_split_mode"]
 so_width = cfg["analysis"]["stacking_slice_width_Mpc"] # width of the slice in which to select the stacking objects, in cMpc
 oo_width = cfg["analysis"]["orientation_slice_width_Mpc"] # width of the slice in which to select the orientation objects, in cMpc; only relevant if los_split_mode is 'auto_overlap'
@@ -53,6 +53,8 @@ minz = cfg["analysis"]["z_min"]
 maxz = cfg["analysis"]["z_max"]
 ##################################
 
+if randoms_catalog is not None and maskfile is not None:
+    print("Warning: entered both mask file and randoms file, will only use randoms.")
 
 smth_str = ("{:.1f}".format(smth)).replace('.','pt')
 
@@ -93,14 +95,20 @@ if not os.path.exists(os.path.join(save_path, os.path.basename(config_file_path)
 
 if los_split_mode == 'custom_zlist':
     # enter the pre-defined redshift bins as the first argument
+    # these will define both the orientation and stacking bins, which will be the same
     zbins = cfg["analysis"]["z_bins"]
     dlist_tot_oo, zlist_tot_oo = sao.dlist(cosmo, zlist=zbins)
+    dlist_tot_so = dlist_tot_oo
+    zlist_tot_so = zlist_tot_oo
 
 elif los_split_mode == 'custom_dlist':
     # enter the pre-defined comoving distance bins as the first argument
+    # these will define both the orientation and stacking bins, which will be the same
     dbins = cfg["analysis"]["chi_bins"]
     dlist_tot_oo, zlist_tot_oo = sao.dlist(cosmo, dlist=dbins)
-    
+    dlist_tot_so = dlist_tot_oo
+    zlist_tot_so = zlist_tot_oo
+
 elif los_split_mode == 'auto_overlap':
     minz = minz
     maxz = maxz
@@ -128,9 +136,10 @@ if randoms_catalog is not None:
 # take a fraction of the orient + randoms catalog if frac is less than 1
 if frac_use < 1:
     rand_idx_oo = np.random.choice(len(cat_oo.ra), size=int(frac_use*len(cat_oo.ra)), replace=False)
-    cat_oo.prune_catalog(index=rand_idx_oo)
-    rand_idx_rand = np.random.choice(len(cat_ran.ra), size=int(frac_use*len(cat_ran.ra)), replace=False)
-    cat_ran.prune_catalog(index=rand_idx_rand)
+    cat_oo.prune_catalog(index=rand_idx_oo, inplace=True)
+    if randoms_catalog is not None:
+        rand_idx_rand = np.random.choice(len(cat_ran.ra), size=int(frac_use*len(cat_ran.ra)), replace=False)
+        cat_ran.prune_catalog(index=rand_idx_rand, inplace=True)
 
 # prune all catalogs to z range and order by z
 print(f"Pruning catalogs to z range and sorting by z. Catalog is initially, {len(cat_so.ra)} long.")
@@ -140,7 +149,7 @@ cat_oo.prune_catalog(condition={"z":(minz-0.1, maxz+0.1)}, inplace=True)
 cat_so.sort_catalog(sort_by="z")
 cat_oo.sort_catalog(sort_by="z")
 if randoms_catalog is not None:
-    cat_ran.prune_catalog(condition={"z":(minz, maxz)}, inplace=True)
+    cat_ran.prune_catalog(condition={"z":(minz-0.1, maxz+0.1)}, inplace=True)
     cat_ran.sort_catalog(sort_by="z")
 
 
@@ -148,11 +157,11 @@ if randoms_catalog is not None:
 dbincent = [(dlist_tot_so[i][0]+dlist_tot_so[i][1])/2. for i in range(len(dlist_tot_so))]
 zbincent = [z_at_value(cosmo.comoving_distance, dbincent[i]*u.Mpc).value for i in range(len(dbincent))]
 smth_arcmin = [(cosmo.arcsec_per_kpc_comoving(zbincent[i]).to(u.arcmin/u.Mpc) * (smth*u.Mpc)).value for i in range(len(zbincent))]
-if los_split_mode=='auto_overlap' or los_split_mode=='custom_dlist':
+if los_split_mode=='auto_overlap':
     # widths of stacking objects and orient objects are different
     dlist_tot_oo = np.asarray([[dbincent[i]-oo_width/2., dbincent[i]+oo_width/2.] for i in range(len(dbincent))])
     zlist_tot_oo = np.asarray([[z_at_value(cosmo.comoving_distance, dlist_tot_oo[i][0]*u.Mpc).value, z_at_value(cosmo.comoving_distance, dlist_tot_oo[i][1]*u.Mpc).value] for i in range(len(dbincent))])
-elif los_split_mode=='auto_all' or los_split_mode=='custom_zlist':
+elif los_split_mode=='custom_zlist' or los_split_mode=='custom_dlist':
     # widths of stacking objects and orient objects are the same
     dlist_tot_oo = dlist_tot_so
     zlist_tot_oo = zlist_tot_so
@@ -222,7 +231,7 @@ for i in range(len(zlist_tot_so)):
         if not os.path.exists(os.path.join(save_path, "maps")):
             os.mkdir(os.path.join(save_path, "maps"))
         
-        pkmap = os.path.join(save_path, "maps", "odmap_{:s}_{:d}_{:s}.fits".format(orient_mode, pct, binstr_orient))
+        pkmap = os.path.join(save_path, "maps", "odmap_{:s}_{:s}_{:s}.fits".format(orient_mode, pctstr, binstr_orient))
         hp.write_map(pkmap, odmap, overwrite=True, dtype=np.float32)
     
     if orient_mode in ['asym_xy', 'asym_x', 'asym_y']:
@@ -234,7 +243,7 @@ for i in range(len(zlist_tot_so)):
     dec_inbin = cat_so.dec[cat_split_idx_so_lower[i]:cat_split_idx_so_upper[i]]
     print("Number of objects in bin:", len(ra_inbin), len(dec_inbin))
     if len(ra_inbin)>0:
-        alpha, e, nu, x_pol, y_pol = sao.measure_orientation_QU(ra_inbin, dec_inbin, odmap, mode='density', compute_xy_pol=True, mask=mask)
+        alpha, e, nu, x_pol, y_pol = sao.measure_orientation_QU(ra_inbin, dec_inbin, odmap, mode='density', compute_xy_pol=compute_xy_pol, mask=mask)
         # save the quantities. There should be 1 alpha, e, nu etc measured per stacking-object.
         cat_so.alpha[cat_split_idx_so_lower[i]:cat_split_idx_so_upper[i]] = alpha
         cat_so.e[cat_split_idx_so_lower[i]:cat_split_idx_so_upper[i]] = e
@@ -250,7 +259,8 @@ print(f"Total time for processing zbins was {tot_time:.0f} seconds, or {(tot_tim
 
 # prep the dictionary for saving. 
 # remove all rows with nans (e.g., some distances might not have been recorded)
-print("Catalog has nans with zmin", cat_so.z[np.isnan(cat_so.alpha)].min(), "and zmax", cat_so.z[np.isnan(cat_so.alpha)].max())
+if np.any(np.isnan(cat_so.alpha)):
+    print("Catalog has nans with zmin", cat_so.z[np.isnan(cat_so.alpha)].min(), "and zmax", cat_so.z[np.isnan(cat_so.alpha)].max())
 cat_so.remove_nans()
 # report final zmin, zmax of catalog
 print("Final catalog zmin, zmax:", cat_so.z.min(), cat_so.z.max())
