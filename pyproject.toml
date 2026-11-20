@@ -6,7 +6,20 @@ authors = [
 ]
 description = "Constrained oriented stacking for CMB x LSS"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "pandas",
+    "pixell",
+    "healpy",
+    "kmeans_radec @ git+https://github.com/esheldon/kmeans_radec.git",
+    "fitsio",
+    "h5py",
+    "cython",
+    "pkgconfig",
+    "setuptools",
+    "ipykernel"
+]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",

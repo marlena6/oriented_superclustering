@@ -118,18 +118,21 @@ class Catalog(object):
             
         if remove_nans:
             self.remove_nans()
-            
+        # set all other attributes to None if they don't exist
+        for attr in ['ra', 'dec', 'z', 'alpha', 'vr', 'x_pol', 'y_pol', 'e', 'nu', 'w', 'id']:
+            if not hasattr(self, attr):
+                setattr(self, attr, None)            
 
     def remove_nans(self):
         good = np.ones(len(self.ra)).astype(bool)
         for attr in ['ra', 'dec', 'z', 'alpha', 'vr', 'x_pol', 'y_pol', 'e', 'nu', 'w']:
-            if attr in self.__dict__.keys():
+            if attr in self.__dict__.keys() and getattr(self, attr) is not None:
                 idx_good = ~np.isnan(getattr(self, attr))
                 good &= idx_good
 
         if sum(~good) > 0:
             for attr in ['id', 'ra', 'dec', 'z', 'alpha', 'vr', 'x_pol', 'y_pol', 'e', 'nu', 'w']:
-                if attr in self.__dict__.keys():
+                if attr in self.__dict__.keys() and getattr(self, attr) is not None:
                     setattr(self, attr, getattr(self, attr)[good])
             self.nObj = len(self.ra) # reset nObj
             print("Removed "+str(sum(~good))+" objects with NaN values from the catalog.")
@@ -278,5 +281,6 @@ class Catalog(object):
         val = enmap.at(imask, np.deg2rad([self.dec, self.ra]), mode="nn")
         full_sample = val > threshold
         for attr in ['ra', 'dec', 'z', 'alpha', 'vr', 'x_pol', 'y_pol', 'e', 'nu', 'w', 'id']:
-            if attr in self.__dict__.keys():
+
+            if attr in self.__dict__.keys() and getattr(self, attr) is not None:
                 setattr(self, attr, getattr(self, attr)[full_sample])
